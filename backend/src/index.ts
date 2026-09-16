@@ -72,7 +72,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 async function start() {
-  // Start HTTP server immediately so Render health check passes
+  // Start HTTP server immediately so hosting platform health checks pass
   app.listen(PORT, () => {
     console.log(`🚀 Backend running on port ${PORT}`);
   });

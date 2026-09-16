@@ -14,7 +14,7 @@ A hosted console that demonstrates how **Okta secures, governs and manages AI Ag
 ```
 GitHub (monorepo)
 ├── frontend/   (Next.js 14, NextAuth + Okta OIDC)
-└── backend/    →  Render       (Express.js, Postgres, Okta Management API)
+└── backend/    (Express.js, Postgres, Okta Management API)
 ```
 
 ---
@@ -22,7 +22,7 @@ GitHub (monorepo)
 ## Prerequisites
 
 1. An **Okta org** (developer or production)
-2. A **Render account** (free tier works, for the backend)
+2. A Node.js host + Postgres database for the backend
 3. A Node.js host for the frontend (any platform that runs Next.js)
 4. **O4AA enabled** on your Okta org (Admin Console → Settings → Features → AI Agents)
 
@@ -62,19 +62,12 @@ Note the **Client ID**.
 
 ---
 
-## Deploy to Render (Backend)
+## Deploy the Backend
 
-1. Fork/clone this repo to GitHub
-2. In [Render Dashboard](https://dashboard.render.com):
-   - **New → PostgreSQL** — create a free Postgres database, copy the Internal Database URL
-   - **New → Web Service** — connect your GitHub repo
-     - Root directory: `backend`
-     - Build command: `npm install && npm run build`
-     - Start command: `npm start`
-     - Add environment variables:
+The `backend/` app is a standard Express/TypeScript service (`npm run build` → `npm start`) that needs a Postgres database and can be deployed to any Node.js host. Set these environment variables wherever it runs:
 
 ```
-DATABASE_URL=<render-postgres-internal-url>
+DATABASE_URL=<postgres-connection-url>
 OKTA_ORG_URL=https://your-org.okta.com
 OKTA_AUTH_MODE=client_credentials
 OKTA_M2M_CLIENT_ID=<api-services-client-id>
@@ -97,7 +90,7 @@ NEXTAUTH_SECRET=<run: openssl rand -base64 32>
 OKTA_CLIENT_ID=<oidc-web-app-client-id>
 OKTA_CLIENT_SECRET=<oidc-web-app-client-secret>
 OKTA_ISSUER=https://your-org.okta.com/oauth2/default
-BACKEND_URL=https://your-backend.onrender.com
+BACKEND_URL=https://your-backend-host
 ```
 
 ---

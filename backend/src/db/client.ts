@@ -3,10 +3,8 @@ import { Pool } from 'pg';
 import * as schema from './schema';
 
 const dbUrl = process.env.DATABASE_URL || '';
-// Internal Render DB URL has no subdomain dots before the DB path
-// External URL contains .render.com or .postgres.render.com
-// Local URL contains localhost
-const needsSsl = dbUrl.includes('.render.com') || dbUrl.includes('.postgres.');
+// Hosted Postgres providers generally require SSL; local dev doesn't.
+const needsSsl = !dbUrl.includes('localhost') && !dbUrl.includes('127.0.0.1');
 
 const pool = new Pool({
   connectionString: dbUrl,
