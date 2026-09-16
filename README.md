@@ -13,7 +13,7 @@ A hosted console that demonstrates how **Okta secures, governs and manages AI Ag
 
 ```
 GitHub (monorepo)
-├── frontend/   →  Vercel       (Next.js 14, NextAuth + Okta OIDC)
+├── frontend/   (Next.js 14, NextAuth + Okta OIDC)
 └── backend/    →  Render       (Express.js, Postgres, Okta Management API)
 ```
 
@@ -22,8 +22,8 @@ GitHub (monorepo)
 ## Prerequisites
 
 1. An **Okta org** (developer or production)
-2. A **Render account** (free tier works)
-3. A **Vercel account**
+2. A **Render account** (free tier works, for the backend)
+3. A Node.js host for the frontend (any platform that runs Next.js)
 4. **O4AA enabled** on your Okta org (Admin Console → Settings → Features → AI Agents)
 
 ---
@@ -35,9 +35,9 @@ GitHub (monorepo)
 In Okta Admin Console → Applications → Create App Integration:
 - Type: **OIDC - Web Application**
 - Grant type: **Authorization Code**
-- Sign-in redirect URI: `https://your-app.vercel.app/api/auth/callback/okta`
+- Sign-in redirect URI: `https://your-frontend-host/api/auth/callback/okta`
   *(also add `http://localhost:3000/api/auth/callback/okta` for local dev)*
-- Sign-out redirect URI: `https://your-app.vercel.app`
+- Sign-out redirect URI: `https://your-frontend-host`
 - Scopes: `openid`, `profile`, `email`
 
 Note the **Client ID** and **Client Secret**.
@@ -79,7 +79,7 @@ OKTA_ORG_URL=https://your-org.okta.com
 OKTA_AUTH_MODE=client_credentials
 OKTA_M2M_CLIENT_ID=<api-services-client-id>
 OKTA_M2M_PRIVATE_JWK=<private-jwk-json-from-public-keys-tab>
-FRONTEND_URL=https://your-app.vercel.app
+FRONTEND_URL=https://your-frontend-host
 PORT=3001
 ```
 
@@ -87,16 +87,12 @@ The backend will auto-migrate and seed default resources on first start.
 
 ---
 
-## Deploy to Vercel (Frontend)
+## Deploy the Frontend
 
-1. In [Vercel Dashboard](https://vercel.com):
-   - **Add New Project** → import from GitHub
-   - Root directory: `frontend`
-   - Framework preset: **Next.js**
-   - Add environment variables:
+The `frontend/` app is a standard Next.js 14 app (`next build` / `next start`) and can be deployed to any Node.js host. Set these environment variables wherever it runs:
 
 ```
-NEXTAUTH_URL=https://your-app.vercel.app
+NEXTAUTH_URL=https://your-frontend-host
 NEXTAUTH_SECRET=<run: openssl rand -base64 32>
 OKTA_CLIENT_ID=<oidc-web-app-client-id>
 OKTA_CLIENT_SECRET=<oidc-web-app-client-secret>
