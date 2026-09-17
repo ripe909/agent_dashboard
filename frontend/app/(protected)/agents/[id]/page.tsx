@@ -106,13 +106,8 @@ export default async function AgentDetailPage({ params }: { params: { id: string
           <Key className="w-3.5 h-3.5 text-amber-400" />
           Client Credentials
         </h2>
-        {agent.okta?.appId ? (
-          <AgentCredentials
-            agentId={agent.id}
-            appId={agent.okta.appId}
-            clientId={agent.credentials?.clientId || agent.okta.appId}
-            currentMethod={agent.credentials?.authMethod || 'client_secret_basic'}
-          />
+        {agent.credentials ? (
+          <AgentCredentials agentId={agent.id} credentials={agent.credentials} />
         ) : (
           <p className="text-sm text-slate-500 italic">
             Credentials are available after the agent is activated.

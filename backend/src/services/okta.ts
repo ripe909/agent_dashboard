@@ -3,7 +3,7 @@
 //   'api_token'         (default) — static SSWS API token via OKTA_API_TOKEN
 //   'client_credentials' — OAuth2 M2M via OKTA_M2M_CLIENT_ID/SECRET
 
-import { randomUUID } from 'crypto';
+import { randomUUID, generateKeyPairSync } from 'crypto';
 import { importJWK, SignJWT } from 'jose';
 import { eventBus, nextId, labelForPath } from './eventBus';
 
@@ -285,11 +285,20 @@ export async function deactivateAIAgent(agentId: string): Promise<void> {
   }
 }
 
-// ── Agent Credentials (backing app) ──────────────────────────────────────────
+// ── Agent Credentials ─────────────────────────────────────────────────────────
+// Two patterns exist depending on how the agent was provisioned:
+//  - 'app':    a separate backing Okta App (appId) holds oauthClient credentials
+//  - 'native': keys are registered directly on the agent's own workload principal
+
+export interface AgentJwk { kid: string; status: string; alg: string; created: string; }
+export interface AgentSecret { id: string; status: string; created: string; }
 
 export interface AgentCredentials {
-  appId: string; clientId: string; authMethod: string;
+  source: 'app' | 'native';
+  appId?: string; clientId: string; authMethod: string;
   clientSecret?: string; hasSecret?: boolean;
+  jwks?: AgentJwk[];
+  secrets?: AgentSecret[];
 }
 
 export async function getAgentCredentials(appId: string): Promise<AgentCredentials> {
@@ -298,11 +307,58 @@ export async function getAgentCredentials(appId: string): Promise<AgentCredentia
   const app = await res.json() as any;
   const creds = app.credentials?.oauthClient || {};
   return {
+    source: 'app',
     appId,
     clientId: creds.client_id || appId,
     authMethod: creds.token_endpoint_auth_method || 'client_secret_basic',
     hasSecret: !!creds.client_secret,
   };
+}
+
+export async function listAgentJwks(agentId: string): Promise<AgentJwk[]> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/jwks`);
+  if (!res.ok) throw new Error(`listAgentJwks ${res.status}: ${await res.text()}`);
+  const data = await res.json() as { data: any[] };
+  return (data.data || []).map((k) => ({ kid: k.kid, status: k.status, alg: k.alg, created: k.created }));
+}
+
+export async function listAgentSecrets(agentId: string): Promise<AgentSecret[]> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets`);
+  if (!res.ok) throw new Error(`listAgentSecrets ${res.status}: ${await res.text()}`);
+  const data = await res.json() as any[];
+  return (data || []).map((s) => ({ id: s.id, status: s.status, created: s.created }));
+}
+
+export async function createAgentSecret(agentId: string): Promise<{ id: string; clientSecret: string; status: string }> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(`createAgentSecret ${res.status}: ${await res.text()}`);
+  const data = await res.json() as any;
+  return { id: data.id, clientSecret: data.client_secret, status: data.status };
+}
+
+export async function createAgentJwk(agentId: string): Promise<{ kid: string; privateKeyPem: string }> {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: 'jwk' }) as any;
+  const kid = randomUUID().replace(/-/g, '');
+
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/jwks`, {
+    method: 'POST',
+    body: JSON.stringify({ kty: jwk.kty, use: 'sig', kid, alg: 'RS256', n: jwk.n, e: jwk.e }),
+  });
+  if (!res.ok) throw new Error(`createAgentJwk ${res.status}: ${await res.text()}`);
+
+  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+  return { kid, privateKeyPem };
+}
+
+export async function getNativeAgentCredentials(agentId: string): Promise<AgentCredentials> {
+  const [jwks, secrets] = await Promise.all([listAgentJwks(agentId), listAgentSecrets(agentId)]);
+  const hasActiveSecret = secrets.some((s) => s.status === 'ACTIVE');
+  const hasActiveKey = jwks.some((k) => k.status === 'ACTIVE');
+  const authMethod = hasActiveSecret ? 'client_secret_basic' : hasActiveKey ? 'private_key_jwt' : 'none';
+  return { source: 'native', clientId: agentId, authMethod, jwks, secrets };
 }
 
 export async function setAgentAuthMethod(appId: string, authMethod: string): Promise<AgentCredentials> {
@@ -325,6 +381,7 @@ export async function setAgentAuthMethod(appId: string, authMethod: string): Pro
   const updated = await putRes.json() as any;
   const creds = updated.credentials?.oauthClient || {};
   return {
+    source: 'app',
     appId,
     clientId: creds.client_id || appId,
     authMethod: creds.token_endpoint_auth_method,

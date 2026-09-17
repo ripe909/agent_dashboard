@@ -120,6 +120,8 @@ router.get('/:id', async (req: Request, res: Response) => {
         oktaData = await okta.getAIAgent(agent.oktaAgentId);
         if (oktaData?.appId) {
           credentials = await okta.getAgentCredentials(oktaData.appId);
+        } else if (oktaData?.oauthClient?.clientId) {
+          credentials = await okta.getNativeAgentCredentials(agent.oktaAgentId);
         }
         adminConsoleUrl = await okta.getAgentAdminUrl(agent.oktaAgentId);
       } catch {}
@@ -209,6 +211,34 @@ router.put('/:id/credentials', async (req: Request, res: Response) => {
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
     if (!oktaAgent.appId) return res.status(400).json({ error: 'Agent must be activated before configuring credentials' });
     const result = await okta.setAgentAuthMethod(oktaAgent.appId, authMethod);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/credentials/secret — generate a client secret for a native (no backing app) agent
+router.post('/:id/credentials/secret', async (req: Request, res: Response) => {
+  try {
+    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    if (oktaAgent.appId) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
+    const result = await okta.createAgentSecret(agent.oktaAgentId);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/credentials/jwk — generate a keypair and register the public key for a native agent
+router.post('/:id/credentials/jwk', async (req: Request, res: Response) => {
+  try {
+    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    if (oktaAgent.appId) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
+    const result = await okta.createAgentJwk(agent.oktaAgentId);
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });

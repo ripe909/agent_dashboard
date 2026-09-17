@@ -3,9 +3,20 @@ import { useState } from 'react';
 import { Copy, Check, RefreshCw, Key, Shield, Lock } from 'lucide-react';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+const OKTA_ORG = (process.env.NEXT_PUBLIC_OKTA_ORG || '').replace(/^https?:\/\//, '');
+
+interface AgentJwk { kid: string; status: string; alg: string; created: string; }
+interface AgentSecret { id: string; status: string; created: string; }
+
+interface Credentials {
+  source: 'app' | 'native';
+  appId?: string; clientId: string; authMethod: string;
+  hasSecret?: boolean; jwks?: AgentJwk[]; secrets?: AgentSecret[];
+}
 
 interface Props {
-  agentId: string; appId: string; clientId: string; currentMethod: string;
+  agentId: string;
+  credentials: Credentials;
 }
 
 const AUTH_METHODS = [
@@ -29,18 +40,221 @@ const AUTH_METHODS = [
   },
 ];
 
-export default function AgentCredentials({ agentId, appId, clientId, currentMethod }: Props) {
-  const [method, setMethod] = useState(currentMethod);
+function ClientIdField({ clientId }: { clientId: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Client ID</label>
+      <div className="flex items-center gap-2 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
+        <span className="flex-1 text-sm text-white font-mono truncate">{clientId}</span>
+        <button
+          onClick={() => { navigator.clipboard.writeText(clientId); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+          className="text-slate-500 hover:text-[#60a5fa] flex-shrink-0"
+        >
+          {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+        </button>
+      </div>
+      {OKTA_ORG && (
+        <p className="text-xs text-slate-600 mt-1">
+          Okta domain: <span className="font-mono">{OKTA_ORG}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function statusColour(status: string) {
+  return status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-500/15 text-slate-400';
+}
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function RevealOnce({ label, value, warning }: { label: string; value: string; warning: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="bg-amber-500/8 border border-amber-500/25 rounded-lg p-3 space-y-2">
+      <div className="text-xs font-semibold text-amber-300">{warning}</div>
+      <div className="flex items-center gap-2 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
+        <span className="flex-1 text-xs text-white font-mono truncate">{value}</span>
+        <button
+          onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+          className="text-slate-500 hover:text-[#60a5fa] flex-shrink-0"
+        >
+          {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const NATIVE_OPTIONS = [
+  {
+    value: 'client_secret_basic',
+    label: 'Client secret',
+    icon: Lock,
+    description: 'A shared secret for confidential, server-side agents.',
+  },
+  {
+    value: 'private_key_jwt',
+    label: 'Public/private key',
+    icon: Key,
+    description: 'For AI agents with a builder-managed key pair. (Most secure)',
+  },
+  {
+    value: 'none',
+    label: 'Client ID only',
+    icon: Shield,
+    description: "For public clients that can't store a secret, like local coding agents. (Least secure)",
+  },
+];
+
+function NativeCredentials({ agentId, credentials: initial }: { agentId: string; credentials: Credentials }) {
+  const [credentials, setCredentials] = useState(initial);
+  const [loading, setLoading] = useState<'secret' | 'jwk' | null>(null);
+  const [error, setError] = useState('');
+  const [newSecret, setNewSecret] = useState('');
+  const [newKey, setNewKey] = useState<{ kid: string; privateKeyPem: string } | null>(null);
+
+  async function refresh() {
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}`);
+      const data = await res.json();
+      if (data.credentials) setCredentials(data.credentials);
+    } catch {}
+  }
+
+  async function generateSecret() {
+    setLoading('secret'); setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/credentials/secret`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to generate secret'); return; }
+      setNewSecret(data.clientSecret);
+      await refresh();
+    } catch (e: any) { setError(e.message); }
+    setLoading(null);
+  }
+
+  async function generateKey() {
+    setLoading('jwk'); setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/credentials/jwk`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to generate key pair'); return; }
+      setNewKey(data);
+      await refresh();
+    } catch (e: any) { setError(e.message); }
+    setLoading(null);
+  }
+
+  return (
+    <div className="space-y-4">
+      <ClientIdField clientId={credentials.clientId} />
+
+      {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</div>}
+
+      <div>
+        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Client Registration</label>
+        <div className="space-y-2">
+          {NATIVE_OPTIONS.map(({ value, label, icon: Icon, description }) => {
+            const isCurrent = credentials.authMethod === value;
+            return (
+              <div
+                key={value}
+                className={`p-3 rounded-lg border transition-all ${
+                  isCurrent ? 'border-[#1662dd]/40 bg-[#1662dd]/8' : 'border-[#1e293b] bg-[#0a0f1e]'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <Icon className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-white">{label}</span>
+                      {isCurrent && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-[#1662dd]/20 text-[#60a5fa]">CURRENT</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">{description}</div>
+                  </div>
+                  {value === 'client_secret_basic' && (
+                    <button
+                      onClick={generateSecret}
+                      disabled={loading !== null}
+                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40 flex-shrink-0"
+                    >
+                      {loading === 'secret' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                      Generate
+                    </button>
+                  )}
+                  {value === 'private_key_jwt' && (
+                    <button
+                      onClick={generateKey}
+                      disabled={loading !== null}
+                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40 flex-shrink-0"
+                    >
+                      {loading === 'jwk' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                      Generate
+                    </button>
+                  )}
+                </div>
+
+                {value === 'client_secret_basic' && newSecret && (
+                  <div className="mt-3">
+                    <RevealOnce
+                      label="Client secret"
+                      value={newSecret}
+                      warning="Copy this secret now — it won't be shown again."
+                    />
+                  </div>
+                )}
+                {value === 'private_key_jwt' && newKey && (
+                  <div className="mt-3 space-y-2">
+                    <RevealOnce
+                      label="Private key"
+                      value={newKey.privateKeyPem}
+                      warning="Copy this private key now — Okta only stored the public key, this won't be shown again."
+                    />
+                  </div>
+                )}
+
+                {value === 'client_secret_basic' && credentials.secrets && credentials.secrets.length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    {credentials.secrets.map((s) => (
+                      <div key={s.id} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2 text-xs">
+                        <span className="text-slate-500 font-mono">•••• {s.id.slice(-6)}</span>
+                        <span className="text-slate-600">created {formatDate(s.created)}</span>
+                        <span className={`ml-auto px-1.5 py-0.5 rounded font-medium ${statusColour(s.status)}`}>{s.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {value === 'private_key_jwt' && credentials.jwks && credentials.jwks.length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    {credentials.jwks.map((k) => (
+                      <div key={k.kid} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2 text-xs">
+                        <span className="text-white font-mono truncate">{k.kid}</span>
+                        <span className="text-slate-600 flex-shrink-0">{k.alg} · {formatDate(k.created)}</span>
+                        <span className={`ml-auto px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${statusColour(k.status)}`}>{k.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AppCredentials({ agentId, credentials }: { agentId: string; credentials: Credentials }) {
+  const [method, setMethod] = useState(credentials.authMethod);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
-  const [copied, setCopied] = useState('');
-
-  function copy(text: string, key: string) {
-    navigator.clipboard.writeText(text);
-    setCopied(key);
-    setTimeout(() => setCopied(''), 2000);
-  }
 
   async function saveMethod() {
     setSaving(true); setError(''); setSaved(false);
@@ -60,19 +274,7 @@ export default function AgentCredentials({ agentId, appId, clientId, currentMeth
 
   return (
     <div className="space-y-4">
-      {/* Client ID — always shown */}
-      <div>
-        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Client ID</label>
-        <div className="flex items-center gap-2 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
-          <span className="flex-1 text-sm text-white font-mono truncate">{clientId}</span>
-          <button onClick={() => copy(clientId, 'clientId')} className="text-slate-500 hover:text-[#60a5fa] flex-shrink-0">
-            {copied === 'clientId' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-          </button>
-        </div>
-        <p className="text-xs text-slate-600 mt-1">
-          Okta domain: <span className="font-mono">demo-ai-patterns.oktapreview.com</span>
-        </p>
-      </div>
+      <ClientIdField clientId={credentials.clientId} />
 
       {/* Auth method picker */}
       <div>
@@ -110,7 +312,7 @@ export default function AgentCredentials({ agentId, appId, clientId, currentMeth
       <div className="flex items-center gap-3">
         <button
           onClick={saveMethod}
-          disabled={saving || method === currentMethod}
+          disabled={saving || method === credentials.authMethod}
           className="flex items-center gap-2 px-4 py-2 bg-[#1662dd] hover:bg-blue-600 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
         >
           {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
@@ -123,10 +325,15 @@ export default function AgentCredentials({ agentId, appId, clientId, currentMeth
 
       {method === 'private_key_jwt' && (
         <div className="bg-amber-500/8 border border-amber-500/20 rounded-lg px-3 py-3 text-xs text-amber-300">
-          <strong>Private Key JWT:</strong> Upload a public key to Okta Admin Console → Applications → {clientId} → Client Credentials tab, or use the Okta JWKS API at{' '}
-          <span className="font-mono">/workload-principals/api/v1/ai-agents/{`{agentId}`}/credentials/jwks</span>
+          <strong>Private Key JWT:</strong> Upload a public key to Okta Admin Console → Applications → {credentials.clientId} → Client Credentials tab.
         </div>
       )}
     </div>
   );
+}
+
+export default function AgentCredentials({ agentId, credentials }: Props) {
+  return credentials.source === 'native'
+    ? <NativeCredentials agentId={agentId} credentials={credentials} />
+    : <AppCredentials agentId={agentId} credentials={credentials} />;
 }
