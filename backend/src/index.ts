@@ -6,7 +6,7 @@ import usersRouter from './routes/users';
 import resourcesRouter from './routes/resources';
 import connectionsRouter from './routes/connections';
 import { eventBus, OktaApiEvent } from './services/eventBus';
-import { migrate, seedResources } from './db/client';
+import { store } from './db/client';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,10 +17,9 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Keep-alive: ping DB every 8 minutes to prevent idle connection drop
-import { pool as pgPool } from './db/client';
+// Keep-alive: ping DB every 8 minutes to prevent idle connection drop (no-op in memory mode)
 setInterval(async () => {
-  try { await pgPool.query('SELECT 1'); } catch (e: any) {
+  try { await store.keepAlive(); } catch (e: any) {
     console.warn('Keep-alive ping failed (will retry on next request):', e.message);
   }
 }, 8 * 60 * 1000);
@@ -77,20 +76,18 @@ async function start() {
     console.log(`🚀 Backend running on port ${PORT}`);
   });
 
-  // DB setup runs after server is up — retries on failure
+  // Store setup runs after server is up — retries on failure (Postgres mode only; memory mode succeeds immediately)
   const setupDb = async (retries = 5): Promise<void> => {
     try {
-      await migrate();
-      console.log('✅ Database migrated');
-      await seedResources();
+      await store.init();
       console.log('✅ Ready');
     } catch (e: any) {
       if (retries > 0) {
-        console.warn(`⚠️  DB not ready, retrying in 5s (${retries} left):`, e.message);
+        console.warn(`⚠️  Store not ready, retrying in 5s (${retries} left):`, e.message);
         await new Promise(r => setTimeout(r, 5000));
         return setupDb(retries - 1);
       }
-      console.error('❌ DB setup failed:', e.message);
+      console.error('❌ Store setup failed:', e.message);
     }
   };
   setupDb();

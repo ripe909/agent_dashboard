@@ -1,7 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { db } from '../db/client';
-import { agents } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { store } from '../db/client';
 import * as okta from '../services/okta';
 
 const router = Router();
@@ -30,7 +28,7 @@ router.get('/:id/potential-connections/:type', async (req: Request, res: Respons
 // GET /api/agents/:id/connections — current Okta connections
 router.get('/:id/connections', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.json([]);
     const connections = await okta.listAgentConnections(agent.oktaAgentId);
     res.json(connections);
@@ -42,7 +40,7 @@ router.get('/:id/connections', async (req: Request, res: Response) => {
 // POST /api/agents/:id/connections — create a connection in Okta
 router.post('/:id/connections', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found or not registered in Okta' });
     const connection = await okta.createAgentConnection(agent.oktaAgentId, req.body);
     res.status(201).json(connection);
@@ -54,7 +52,7 @@ router.post('/:id/connections', async (req: Request, res: Response) => {
 // DELETE /api/agents/:id/connections/:connId
 router.delete('/:id/connections/:connId', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     await okta.deleteAgentConnection(agent.oktaAgentId, req.params.connId);
     res.status(204).send();

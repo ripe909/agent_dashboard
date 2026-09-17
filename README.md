@@ -120,6 +120,8 @@ npm run dev            # starts on :3000
 
 Open http://localhost:3000 → sign in with Okta → you're in.
 
+**Skipping Postgres for a quick demo:** set `DB_MODE=memory` in `backend/.env` (no `DATABASE_URL` needed). The backend then keeps its local state — the owner cache and resource catalog — in memory instead of Postgres. Everything works the same, with two tradeoffs: state resets on every restart, and local agent IDs change on restart (bookmarked `/agents/:id` URLs from a previous run will 404 until the list page is reloaded).
+
 ---
 
 ## What you can demo

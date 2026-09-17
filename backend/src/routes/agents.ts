@@ -1,28 +1,26 @@
 import { Router, Request, Response } from 'express';
-import { db } from '../db/client';
-import { agents, agentResources, resources } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { store } from '../db/client';
 import * as okta from '../services/okta';
 
 const router = Router();
 
-// ── Sync helper: upsert an Okta agent into local DB ──────────────────────────
+// ── Sync helper: upsert an Okta agent into local store ───────────────────────
 async function upsertAgent(oktaAgent: okta.OktaAIAgent) {
-  const existing = await db.select().from(agents)
-    .where(eq(agents.oktaAgentId, oktaAgent.id));
-  if (existing.length) {
-    await db.update(agents)
-      .set({ name: oktaAgent.profile.name, description: oktaAgent.profile.description || null, status: oktaAgent.status.toLowerCase() })
-      .where(eq(agents.oktaAgentId, oktaAgent.id));
-    return existing[0];
+  const existing = await store.findAgentByOktaId(oktaAgent.id);
+  if (existing) {
+    const updated = await store.updateAgentByOktaId(oktaAgent.id, {
+      name: oktaAgent.profile.name,
+      description: oktaAgent.profile.description || null,
+      status: oktaAgent.status.toLowerCase(),
+    });
+    return updated || existing;
   }
-  const [a] = await db.insert(agents).values({
+  return store.insertAgent({
     name: oktaAgent.profile.name,
     description: oktaAgent.profile.description || null,
     oktaAgentId: oktaAgent.id,
     status: oktaAgent.status.toLowerCase(),
-  }).returning();
-  return a;
+  });
 }
 
 // GET /api/agents — Okta is the source of truth: only return agents that exist in Okta
@@ -31,26 +29,23 @@ router.get('/', async (_req: Request, res: Response) => {
     const oktaAgents = await okta.listAIAgents(200);
     const oktaIds = new Set(oktaAgents.map(a => a.id));
 
-    // Upsert current Okta agents into local DB
+    // Upsert current Okta agents into local store
     await Promise.all(oktaAgents.map(upsertAgent));
 
-    // Purge any local DB rows whose Okta agent has been deleted
-    const allLocal = await db.select().from(agents);
+    // Purge any local rows whose Okta agent has been deleted
+    const allLocal = await store.listAgents();
     const stale = allLocal.filter(a => a.oktaAgentId && !oktaIds.has(a.oktaAgentId));
     await Promise.all(stale.map(async (a) => {
-      await db.delete(agentResources).where(eq(agentResources.agentId, a.id));
-      await db.delete(agents).where(eq(agents.id, a.id));
+      await store.deleteAgentResourcesByAgentId(a.id);
+      await store.deleteAgentById(a.id);
     }));
 
     // Return only agents that exist in Okta, enriched with local metadata
     const withCounts = await Promise.all(
       oktaAgents.map(async (oktaAgent) => {
         // Find or create the local row
-        const localRows = await db.select().from(agents).where(eq(agents.oktaAgentId, oktaAgent.id));
-        const local = localRows[0];
-        const linked = local
-          ? await db.select().from(agentResources).where(eq(agentResources.agentId, local.id))
-          : [];
+        const local = await store.findAgentByOktaId(oktaAgent.id);
+        const linked = local ? await store.listAgentResourceIds(local.id) : [];
         const agentOrn = okta.agentOrnFromLinks(oktaAgent._links);
         const oktaOwners = agentOrn ? await okta.listResourceOwnersByOrn(agentOrn).catch(() => []) : [];
         const liveOwner = oktaOwners[0];
@@ -82,7 +77,7 @@ router.get('/', async (_req: Request, res: Response) => {
   }
 });
 
-// POST /api/agents — create in Okta, store in DB
+// POST /api/agents — create in Okta, store locally
 router.post('/', async (req: Request, res: Response) => {
   const { name, description } = req.body;
   const createdBy = req.headers['x-user-id'] as string | undefined;
@@ -90,11 +85,11 @@ router.post('/', async (req: Request, res: Response) => {
 
   try {
     const oktaAgent = await okta.createAIAgent(name.trim(), description?.trim());
-    const [agent] = await db.insert(agents).values({
+    const agent = await store.insertAgent({
       name: oktaAgent.profile.name, description: oktaAgent.profile.description || null,
       oktaAgentId: oktaAgent.id, status: oktaAgent.status?.toLowerCase() || 'staged',
       createdBy: createdBy || null,
-    }).returning();
+    });
     res.status(201).json({ ...agent, oktaStatus: oktaAgent.status });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -104,12 +99,10 @@ router.post('/', async (req: Request, res: Response) => {
 // GET /api/agents/:id — full agent detail with live Okta data
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const linked = await db.select({ resource: resources })
-      .from(agentResources).innerJoin(resources, eq(agentResources.resourceId, resources.id))
-      .where(eq(agentResources.agentId, agent.id));
+    const linked = await store.listAgentResourcesJoined(agent.id);
 
     let oktaData: any = null;
     let credentials: any = null;
@@ -130,7 +123,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 
     res.json({
       ...agent,
-      resources: linked.map(l => l.resource),
+      resources: linked,
       okta: oktaData,
       credentials,
       adminConsoleUrl,
@@ -147,10 +140,8 @@ router.put('/:id/owner', async (req: Request, res: Response) => {
   if (!userId) return res.status(400).json({ error: 'userId is required' });
   try {
     const user = await okta.getUser(userId);
-    // 1. Store in local DB
-    const [updated] = await db.update(agents)
-      .set({ ownerId: user.id, ownerName: user.displayName, ownerEmail: user.email })
-      .where(eq(agents.id, req.params.id)).returning();
+    // 1. Store locally
+    const updated = await store.updateAgentById(req.params.id, { ownerId: user.id, ownerName: user.displayName, ownerEmail: user.email });
     if (!updated) return res.status(404).json({ error: 'Agent not found' });
 
     // 2. Register the owner in Okta's IGA governance registry
@@ -177,11 +168,11 @@ router.put('/:id/owner', async (req: Request, res: Response) => {
 // POST /api/agents/:id/activate
 router.post('/:id/activate', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     const result = await okta.activateAIAgent(agent.oktaAgentId);
-    // Update local DB status
-    await db.update(agents).set({ status: 'active' }).where(eq(agents.id, req.params.id));
+    // Update local status
+    await store.updateAgentById(req.params.id, { status: 'active' });
     res.json({ message: 'Activation triggered', ...result });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -191,10 +182,10 @@ router.post('/:id/activate', async (req: Request, res: Response) => {
 // POST /api/agents/:id/deactivate
 router.post('/:id/deactivate', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     await okta.deactivateAIAgent(agent.oktaAgentId);
-    await db.update(agents).set({ status: 'inactive' }).where(eq(agents.id, req.params.id));
+    await store.updateAgentById(req.params.id, { status: 'inactive' });
     res.json({ message: 'Deactivated' });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -206,7 +197,7 @@ router.put('/:id/credentials', async (req: Request, res: Response) => {
   const { authMethod } = req.body; // 'none' | 'client_secret_basic' | 'private_key_jwt'
   if (!authMethod) return res.status(400).json({ error: 'authMethod is required' });
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
     if (!oktaAgent.appId) return res.status(400).json({ error: 'Agent must be activated before configuring credentials' });
@@ -220,7 +211,7 @@ router.put('/:id/credentials', async (req: Request, res: Response) => {
 // POST /api/agents/:id/credentials/secret — generate a client secret for a native (no backing app) agent
 router.post('/:id/credentials/secret', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
     if (oktaAgent.appId) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
@@ -234,7 +225,7 @@ router.post('/:id/credentials/secret', async (req: Request, res: Response) => {
 // POST /api/agents/:id/credentials/jwk — generate a keypair and register the public key for a native agent
 router.post('/:id/credentials/jwk', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
     if (oktaAgent.appId) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
@@ -248,11 +239,11 @@ router.post('/:id/credentials/jwk', async (req: Request, res: Response) => {
 // DELETE /api/agents/:id
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const [agent] = await db.select().from(agents).where(eq(agents.id, req.params.id));
+    const agent = await store.findAgentById(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
     if (agent.oktaAgentId) await okta.deleteAIAgent(agent.oktaAgentId).catch(() => {});
-    await db.delete(agentResources).where(eq(agentResources.agentId, req.params.id));
-    await db.delete(agents).where(eq(agents.id, req.params.id));
+    await store.deleteAgentResourcesByAgentId(req.params.id);
+    await store.deleteAgentById(req.params.id);
     res.status(204).send();
   } catch (e: any) {
     res.status(500).json({ error: e.message });
