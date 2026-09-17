@@ -51,6 +51,13 @@ In Okta Admin Console → Applications → Create App Integration:
   - `okta.users.read`
   - `okta.aiAgents.manage` *(requires O4AA to be enabled)*
   - `okta.apps.manage`
+  - `okta.governance.resourceOwner.manage`
+  - `okta.governance.resourceOwner.read`
+- In the **Admin roles** tab, assign:
+  - **AI Agents Administrator** — resource set: AI Agent Resource Set
+  - **Application Administrator** — resource set: the app(s) whose credentials this dashboard should be able to manage
+
+  API scope grants alone aren't enough for AI Agent and App management calls — Okta also requires an admin role assignment covering the resources being acted on.
 - Ensure **DPoP (Demonstrating Proof of Possession)** is *not* required on this app — the org authorization server's client_credentials flow needs `private_key_jwt`, which is separate from DPoP.
 - On the **Public Keys** tab, generate a keypair. Okta shows the private key once — save it (see `OKTA_M2M_PRIVATE_JWK` below). The public half stays registered on the app; the org authorization server requires `private_key_jwt`, not a client secret, for client_credentials grants.
 
@@ -58,7 +65,7 @@ Note the **Client ID**.
 
 > The backend's `OKTA_AUTH_MODE` env var selects which of the two Okta apps above it authenticates with:
 > - `api_token` (default) — a static SSWS token via `OKTA_API_TOKEN`. Simplest option for local dev.
-> - `client_credentials` — OAuth2 M2M via `private_key_jwt`, requesting `okta.users.read okta.aiAgents.manage okta.apps.manage` from the org authorization server. Closer to how a production deployment should run. Requires `OKTA_M2M_CLIENT_ID` and `OKTA_M2M_PRIVATE_JWK` (the private JWK from the Public Keys tab above).
+> - `client_credentials` — OAuth2 M2M via `private_key_jwt`, requesting the scopes above from the org authorization server. Closer to how a production deployment should run. Requires `OKTA_M2M_CLIENT_ID` and `OKTA_M2M_PRIVATE_JWK` (the private JWK from the Public Keys tab above).
 
 ---
 
