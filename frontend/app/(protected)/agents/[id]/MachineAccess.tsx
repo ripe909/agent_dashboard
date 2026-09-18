@@ -12,11 +12,116 @@ interface AgentOption { id: string; name: string; }
 interface Props {
   agentId: string;
   resourceUrl?: string;
+  streamlined: boolean;
 }
 
 type WizardStep = 'closed' | 'type' | 'agent' | 'details';
 
-export default function MachineAccess({ agentId, resourceUrl: initialResourceUrl }: Props) {
+// ── Streamlined flow: pick a caller, submit — audience + shared authz server handled server-side ──
+function StreamlinedMachineAccess({ agentId }: { agentId: string }) {
+  const [callers, setCallers] = useState<Caller[]>([]);
+  const [loadingCallers, setLoadingCallers] = useState(true);
+  const [picking, setPicking] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadCallers = useCallback(async () => {
+    setLoadingCallers(true);
+    try {
+      const r = await fetch(`${BACKEND}/api/agents/${agentId}/delegations`);
+      const d = await r.json();
+      setCallers(Array.isArray(d) ? d : []);
+    } catch { setCallers([]); }
+    setLoadingCallers(false);
+  }, [agentId]);
+
+  useEffect(() => { loadCallers(); }, [loadCallers]);
+
+  async function assign(agent: AgentOption) {
+    setAssigning(true); setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/machine-access/assign`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callerAgentId: agent.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to add caller'); setAssigning(false); return; }
+      setPicking(false);
+      await loadCallers();
+    } catch (e: any) { setError(e.message); }
+    setAssigning(false);
+  }
+
+  return (
+    <div>
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            Authorized Callers ({loadingCallers ? '…' : callers.length})
+          </span>
+          <button
+            onClick={() => { setPicking((o) => !o); setError(''); }}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add caller
+          </button>
+        </div>
+
+        {loadingCallers ? (
+          <div className="text-xs text-slate-500 text-center py-4">
+            <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Loading callers…
+          </div>
+        ) : callers.length === 0 ? (
+          <div className="text-xs text-slate-500 italic py-4 text-center border border-dashed border-[#1e293b] rounded-lg">
+            No authorized callers yet
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {callers.map((c) => (
+              <div key={c.id} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
+                <div className="w-8 h-8 rounded-lg bg-[#a78bfa]/15 flex items-center justify-center flex-shrink-0">
+                  <Bot className="w-4 h-4 text-[#a78bfa]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-white truncate">{c.callerName}</div>
+                  <div className="text-xs text-slate-500">AI agent</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {error && !picking && (
+        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">{error}</div>
+      )}
+
+      {picking && (
+        <div className="bg-[#0d1525] border border-[#1e293b] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-white">Select the calling agent</h3>
+            <button onClick={() => setPicking(false)} className="text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+          </div>
+          {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2 mb-3">{error}</div>}
+          {assigning ? (
+            <div className="text-xs text-slate-500 text-center py-6">
+              <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Authorizing…
+            </div>
+          ) : (
+            <AgentPicker excludeAgentId={agentId} onSelect={assign} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function MachineAccess({ agentId, resourceUrl: initialResourceUrl, streamlined }: Props) {
+  if (streamlined) return <StreamlinedMachineAccess agentId={agentId} />;
+  return <LegacyMachineAccess agentId={agentId} resourceUrl={initialResourceUrl} />;
+}
+
+function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl }: { agentId: string; resourceUrl?: string }) {
   const [resourceUrl, setResourceUrl] = useState(initialResourceUrl);
   const [callers, setCallers] = useState<Caller[]>([]);
   const [loadingCallers, setLoadingCallers] = useState(true);

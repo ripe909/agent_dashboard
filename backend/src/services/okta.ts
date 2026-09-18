@@ -363,6 +363,15 @@ export function orgIdFromAgentOrn(orn: string): string {
   return orn.split(':')[3];
 }
 
+// Org-level features (like the settings authz-server picker) have no specific agent in context,
+// but every agent's ORN carries the same org ID — so any existing agent works as a source for it.
+// (GET /api/v1/org would be a cleaner source but needs an extra OAuth scope we don't have granted.)
+export async function getAnyOrgId(): Promise<string | undefined> {
+  const agents = await listAIAgents(1);
+  const orn = agents[0] ? agentOrnFromLinks(agents[0]._links) : '';
+  return orn ? orgIdFromAgentOrn(orn) : undefined;
+}
+
 export function buildAuthorizationServerOrn(authServerId: string, orgId: string): string {
   return `orn:oktapreview:idp:${orgId}:authorization_servers:${authServerId}`;
 }
@@ -394,6 +403,27 @@ export async function connectAuthorizationServer(agentId: string, authServerOrn:
     const err = await res.json() as any;
     throw new Error(err.errorSummary || `connectAuthorizationServer ${res.status}`);
   }
+}
+
+// Orchestrates the streamlined Machine Access flow: ensure the target agent has an audience/
+// resource URL (computing one from its own agent ID if it doesn't have one yet — Okta won't let
+// an existing value be changed, so this is a no-op when already set), connect the given shared
+// authorization server to it, and return both ORNs ready for createDelegationLink.
+export async function ensureMachineAccess(agentId: string, authServerId: string): Promise<{ targetOrn: string; authServerOrn: string }> {
+  const agent = await getAIAgent(agentId);
+  const targetOrn = agentOrnFromLinks(agent._links);
+  if (!targetOrn) throw new Error('Could not resolve agent ORN — agent may not be fully provisioned yet');
+
+  const existingResourceUrl = await getAgentResourceUrl(agentId);
+  if (!existingResourceUrl) {
+    await setAgentResourceUrl(agentId, `https://${agentId}`);
+  }
+
+  const orgId = orgIdFromAgentOrn(targetOrn);
+  const authServerOrn = buildAuthorizationServerOrn(authServerId, orgId);
+  await connectAuthorizationServer(agentId, authServerOrn);
+
+  return { targetOrn, authServerOrn };
 }
 
 export async function createDelegationLink(callerOrn: string, targetOrn: string, authServerOrn: string): Promise<void> {

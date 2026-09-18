@@ -64,13 +64,23 @@ export default function EventLog() {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [resizing, setResizing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [hideGet, setHideGet] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     const saved = Number(localStorage.getItem('eventLogWidth'));
     if (saved >= MIN_WIDTH && saved <= MAX_WIDTH) setWidth(saved);
+    setHideGet(localStorage.getItem('eventLogHideGet') === 'true');
   }, []);
+
+  function toggleHideGet() {
+    setHideGet((prev) => {
+      const next = !prev;
+      localStorage.setItem('eventLogHideGet', String(next));
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!resizing) return;
@@ -114,10 +124,12 @@ export default function EventLog() {
     return () => esRef.current?.close();
   }, []);
 
+  const filteredEvents = hideGet ? events.filter((evt) => evt.method !== 'GET') : events;
+
   // Auto-scroll to bottom on new events
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [events.length]);
+  }, [filteredEvents.length]);
 
   function toggleExpand(id: string) {
     setExpanded(prev => {
@@ -183,6 +195,19 @@ export default function EventLog() {
         </div>
       </div>
 
+      {/* Filters */}
+      <div className="px-3 py-1.5 border-b border-[#1e293b] flex-shrink-0">
+        <label className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hideGet}
+            onChange={toggleHideGet}
+            className="accent-[#1662dd] w-3 h-3"
+          />
+          Hide GET calls
+        </label>
+      </div>
+
       {/* Event list */}
       <div className="flex-1 overflow-y-auto text-xs">
         {events.length === 0 ? (
@@ -192,9 +217,14 @@ export default function EventLog() {
               {connected ? 'Perform any action to see live API calls' : 'Connecting to event stream…'}
             </p>
           </div>
+        ) : filteredEvents.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-600">
+            <Activity className="w-6 h-6 opacity-30" />
+            <p className="text-center px-4">All events are GET calls, hidden by the filter above</p>
+          </div>
         ) : (
           <div className="py-1">
-            {events.map((evt) => {
+            {filteredEvents.map((evt) => {
               const isExpanded = expanded.has(evt.id);
               const hasRequestBody = evt.requestBody && Object.keys(evt.requestBody).length > 0;
               const hasResponseBody = evt.responseBody !== undefined && evt.responseBody !== null &&

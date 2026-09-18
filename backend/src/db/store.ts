@@ -7,9 +7,15 @@ export type NewAgent = Pick<Agent, 'name' | 'oktaAgentId' | 'status'> & Partial<
 
 export interface AppSettings {
   streamlinedUserAccess: boolean;
+  streamlinedMachineAccess: boolean;
+  sharedAuthorizationServerId: string | null;
 }
 
-export const DEFAULT_SETTINGS: AppSettings = { streamlinedUserAccess: true };
+export const DEFAULT_SETTINGS: AppSettings = {
+  streamlinedUserAccess: true,
+  streamlinedMachineAccess: true,
+  sharedAuthorizationServerId: null,
+};
 
 export interface Store {
   listAgents(): Promise<Agent[]>;

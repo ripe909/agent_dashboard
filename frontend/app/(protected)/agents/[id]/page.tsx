@@ -20,9 +20,11 @@ export default async function AgentDetailPage({ params }: { params: { id: string
   }
 
   let streamlinedUserAccess = true;
+  let streamlinedMachineAccess = true;
   try {
     const settings = await apiFetch<any>('/api/settings');
     streamlinedUserAccess = !!settings.streamlinedUserAccess;
+    streamlinedMachineAccess = !!settings.streamlinedMachineAccess;
   } catch {}
 
   const liveStatus = agent.okta?.status || agent.status;
@@ -118,7 +120,7 @@ export default async function AgentDetailPage({ params }: { params: { id: string
           Machine Access
           <span className="text-xs text-slate-500 font-normal">— other AI agents authorized to call this agent</span>
         </h2>
-        <MachineAccess agentId={agent.id} resourceUrl={agent.resourceUrl} />
+        <MachineAccess agentId={agent.id} resourceUrl={agent.resourceUrl} streamlined={streamlinedMachineAccess} />
       </section>
 
       {/* Connections */}

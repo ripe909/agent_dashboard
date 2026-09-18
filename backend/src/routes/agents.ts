@@ -407,6 +407,34 @@ router.post('/:id/delegations', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/agents/:id/machine-access/assign — streamlined flow: compute the audience URL and
+// connect the org's shared authorization server if needed, then authorize the caller, in one request.
+router.post('/:id/machine-access/assign', async (req: Request, res: Response) => {
+  const { callerAgentId } = req.body;
+  if (!callerAgentId) return res.status(400).json({ error: 'callerAgentId is required' });
+  try {
+    const settings = await store.getSettings();
+    if (!settings.sharedAuthorizationServerId) {
+      return res.status(400).json({ error: 'Configure a shared authorization server in Settings first' });
+    }
+
+    const target = await store.findAgentById(req.params.id);
+    if (!target?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    const caller = await store.findAgentById(callerAgentId);
+    if (!caller?.oktaAgentId) return res.status(404).json({ error: 'Calling agent not found' });
+
+    const callerOktaAgent = await okta.getAIAgent(caller.oktaAgentId);
+    const callerOrn = okta.agentOrnFromLinks(callerOktaAgent._links);
+    if (!callerOrn) return res.status(400).json({ error: 'Could not resolve calling agent ORN' });
+
+    const { targetOrn, authServerOrn } = await okta.ensureMachineAccess(target.oktaAgentId, settings.sharedAuthorizationServerId);
+    await okta.createDelegationLink(callerOrn, targetOrn, authServerOrn);
+    res.status(201).json({ message: 'Caller authorized' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // DELETE /api/agents/:id
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
