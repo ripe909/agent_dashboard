@@ -97,9 +97,9 @@ function connectionSub(conn: PotentialConnection | AgentConnection): string {
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-interface Props { agentId: string; }
+interface Props { agentId: string; onStatusChange?: (hasConnections: boolean) => void; }
 
-export default function ResourcePicker({ agentId }: Props) {
+export default function ResourcePicker({ agentId, onStatusChange }: Props) {
   const [connections, setConnections] = useState<AgentConnection[]>([]);
   const [allPotential, setAllPotential] = useState<PotentialConnection[]>([]);
   const [loadingConnections, setLoadingConnections] = useState(true);
@@ -131,6 +131,10 @@ export default function ResourcePicker({ agentId }: Props) {
       .catch(() => setAllPotential([]))
       .finally(() => setLoadingPotential(false));
   }, [agentId, loadConnections]);
+
+  useEffect(() => {
+    if (!loadingConnections) onStatusChange?.(connections.length > 0);
+  }, [loadingConnections, connections.length]);
 
   // ── Connected ORNs (to skip already-connected items) ──────────────────────
   const connectedOrns = new Set(connections.map(c =>

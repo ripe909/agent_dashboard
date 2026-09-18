@@ -13,12 +13,13 @@ interface Props {
   agentId: string;
   resourceUrl?: string;
   streamlined: boolean;
+  onStatusChange?: (hasAccess: boolean) => void;
 }
 
 type WizardStep = 'closed' | 'type' | 'agent' | 'details';
 
 // ── Streamlined flow: pick a caller, submit — audience + shared authz server handled server-side ──
-function StreamlinedMachineAccess({ agentId }: { agentId: string }) {
+function StreamlinedMachineAccess({ agentId, onStatusChange }: { agentId: string; onStatusChange?: (hasAccess: boolean) => void }) {
   const [callers, setCallers] = useState<Caller[]>([]);
   const [loadingCallers, setLoadingCallers] = useState(true);
   const [picking, setPicking] = useState(false);
@@ -36,6 +37,10 @@ function StreamlinedMachineAccess({ agentId }: { agentId: string }) {
   }, [agentId]);
 
   useEffect(() => { loadCallers(); }, [loadCallers]);
+
+  useEffect(() => {
+    if (!loadingCallers) onStatusChange?.(callers.length > 0);
+  }, [loadingCallers, callers.length]);
 
   async function assign(agent: AgentOption) {
     setAssigning(true); setError('');
@@ -116,12 +121,12 @@ function StreamlinedMachineAccess({ agentId }: { agentId: string }) {
   );
 }
 
-export default function MachineAccess({ agentId, resourceUrl: initialResourceUrl, streamlined }: Props) {
-  if (streamlined) return <StreamlinedMachineAccess agentId={agentId} />;
-  return <LegacyMachineAccess agentId={agentId} resourceUrl={initialResourceUrl} />;
+export default function MachineAccess({ agentId, resourceUrl: initialResourceUrl, streamlined, onStatusChange }: Props) {
+  if (streamlined) return <StreamlinedMachineAccess agentId={agentId} onStatusChange={onStatusChange} />;
+  return <LegacyMachineAccess agentId={agentId} resourceUrl={initialResourceUrl} onStatusChange={onStatusChange} />;
 }
 
-function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl }: { agentId: string; resourceUrl?: string }) {
+function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl, onStatusChange }: { agentId: string; resourceUrl?: string; onStatusChange?: (hasAccess: boolean) => void }) {
   const [resourceUrl, setResourceUrl] = useState(initialResourceUrl);
   const [callers, setCallers] = useState<Caller[]>([]);
   const [loadingCallers, setLoadingCallers] = useState(true);
@@ -151,6 +156,10 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl }: { age
       .then((d) => setAuthServers(Array.isArray(d) ? d : []))
       .catch(() => setAuthServers([]));
   }, [agentId, loadCallers]);
+
+  useEffect(() => {
+    if (!loadingCallers) onStatusChange?.(callers.length > 0);
+  }, [loadingCallers, callers.length]);
 
   function openWizard() {
     setStep('type');

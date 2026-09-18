@@ -10,15 +10,18 @@ interface Props {
   agentId: string;
   enabled: boolean;
   streamlined: boolean;
+  onStatusChange?: (hasAccess: boolean) => void;
 }
 
 function initials(name?: string) { return name?.trim()?.[0]?.toUpperCase() || '?'; }
 
 // ── Legacy flow: bare "enable" button, no assignment ────────────────────────
-function LegacyUserAccess({ agentId, enabled: initialEnabled }: { agentId: string; enabled: boolean }) {
+function LegacyUserAccess({ agentId, enabled: initialEnabled, onStatusChange }: { agentId: string; enabled: boolean; onStatusChange?: (hasAccess: boolean) => void }) {
   const [enabled, setEnabled] = useState(initialEnabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => { onStatusChange?.(enabled); }, [enabled]);
 
   async function enable() {
     setSaving(true); setError('');
@@ -58,7 +61,7 @@ function LegacyUserAccess({ agentId, enabled: initialEnabled }: { agentId: strin
 }
 
 // ── Streamlined flow: assign users directly, app auto-provisioned behind the scenes ──
-function StreamlinedUserAccess({ agentId }: { agentId: string }) {
+function StreamlinedUserAccess({ agentId, onStatusChange }: { agentId: string; onStatusChange?: (hasAccess: boolean) => void }) {
   const [assignedUsers, setAssignedUsers] = useState<OktaUser[]>([]);
   const [loadingAssigned, setLoadingAssigned] = useState(true);
   const [open, setOpen] = useState(false);
@@ -80,6 +83,10 @@ function StreamlinedUserAccess({ agentId }: { agentId: string }) {
   }, [agentId]);
 
   useEffect(() => { loadAssigned(); }, [loadAssigned]);
+
+  useEffect(() => {
+    if (!loadingAssigned) onStatusChange?.(assignedUsers.length > 0);
+  }, [loadingAssigned, assignedUsers.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -226,8 +233,8 @@ function StreamlinedUserAccess({ agentId }: { agentId: string }) {
   );
 }
 
-export default function UserAccess({ agentId, enabled, streamlined }: Props) {
+export default function UserAccess({ agentId, enabled, streamlined, onStatusChange }: Props) {
   return streamlined
-    ? <StreamlinedUserAccess agentId={agentId} />
-    : <LegacyUserAccess agentId={agentId} enabled={enabled} />;
+    ? <StreamlinedUserAccess agentId={agentId} onStatusChange={onStatusChange} />
+    : <LegacyUserAccess agentId={agentId} enabled={enabled} onStatusChange={onStatusChange} />;
 }

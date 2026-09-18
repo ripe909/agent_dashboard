@@ -35,13 +35,18 @@ function Attribute({ label, attrKey, value }: { label: string; attrKey: string; 
 export default function AgentDetailTabs({ agent, currentOwner, streamlinedUserAccess, streamlinedMachineAccess }: Props) {
   const [tab, setTab] = useState<TabId>('profile');
 
+  const [hasOwner, setHasOwner] = useState(!!currentOwner);
+  const [hasUserAccess, setHasUserAccess] = useState(!!agent.userAccessEnabled);
+  const [hasMachineAccess, setHasMachineAccess] = useState(!!agent.resourceUrl);
+  const [hasConnections, setHasConnections] = useState((agent.resources?.length || 0) > 0);
+
   const tabs: { id: TabId; label: string; complete: 'check' | 'warn' | 'empty' }[] = [
     { id: 'profile', label: 'Profile', complete: 'check' },
-    { id: 'owners', label: 'Owners', complete: currentOwner ? 'check' : 'warn' },
+    { id: 'owners', label: 'Owners', complete: hasOwner ? 'check' : 'warn' },
     { id: 'registration', label: 'Client registration', complete: agent.credentials ? 'check' : 'empty' },
-    { id: 'user_access', label: 'User access', complete: agent.userAccessEnabled ? 'check' : 'empty' },
-    { id: 'machine_access', label: 'Machine access', complete: agent.resourceUrl ? 'check' : 'empty' },
-    { id: 'connections', label: 'Resource connections', complete: (agent.resources?.length || 0) > 0 ? 'check' : 'empty' },
+    { id: 'user_access', label: 'User access', complete: hasUserAccess ? 'check' : 'empty' },
+    { id: 'machine_access', label: 'Machine access', complete: hasMachineAccess ? 'check' : 'empty' },
+    { id: 'connections', label: 'Resource connections', complete: hasConnections ? 'check' : 'empty' },
   ];
 
   return (
@@ -86,7 +91,7 @@ export default function AgentDetailTabs({ agent, currentOwner, streamlinedUserAc
               <SyncOwnersButton scope={{ agentId: agent.id }} />
             </div>
             <p className="text-sm text-[var(--text-secondary)] mb-6">Assigning an owner registers it directly in Okta&apos;s IGA governance registry for this agent.</p>
-            <UserPicker agentId={agent.id} currentOwner={currentOwner} />
+            <UserPicker agentId={agent.id} currentOwner={currentOwner} onAssigned={() => setHasOwner(true)} />
           </div>
         )}
 
@@ -106,7 +111,7 @@ export default function AgentDetailTabs({ agent, currentOwner, streamlinedUserAc
           <div>
             <h2 className="text-lg font-bold text-[var(--text-primary)] mb-1">User access</h2>
             <p className="text-sm text-[var(--text-secondary)] mb-6">Who can access this agent.</p>
-            <UserAccess agentId={agent.id} enabled={!!agent.userAccessEnabled} streamlined={streamlinedUserAccess} />
+            <UserAccess agentId={agent.id} enabled={!!agent.userAccessEnabled} streamlined={streamlinedUserAccess} onStatusChange={setHasUserAccess} />
           </div>
         )}
 
@@ -114,7 +119,7 @@ export default function AgentDetailTabs({ agent, currentOwner, streamlinedUserAc
           <div>
             <h2 className="text-lg font-bold text-[var(--text-primary)] mb-1">Machine access</h2>
             <p className="text-sm text-[var(--text-secondary)] mb-6">What can call this agent — other AI agents authorized to call this agent.</p>
-            <MachineAccess agentId={agent.id} resourceUrl={agent.resourceUrl} streamlined={streamlinedMachineAccess} />
+            <MachineAccess agentId={agent.id} resourceUrl={agent.resourceUrl} streamlined={streamlinedMachineAccess} onStatusChange={setHasMachineAccess} />
           </div>
         )}
 
@@ -122,7 +127,7 @@ export default function AgentDetailTabs({ agent, currentOwner, streamlinedUserAc
           <div>
             <h2 className="text-lg font-bold text-[var(--text-primary)] mb-1">Resource connections</h2>
             <p className="text-sm text-[var(--text-secondary)] mb-6">Resources this agent is configured to access — Auth Servers, Apps, MCP Servers, Secrets &amp; more.</p>
-            <ResourcePicker agentId={agent.id} />
+            <ResourcePicker agentId={agent.id} onStatusChange={setHasConnections} />
           </div>
         )}
       </div>
