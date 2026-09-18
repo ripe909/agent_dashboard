@@ -152,17 +152,9 @@ export default async function AgentDetailPage({ params }: { params: { id: string
       <section className="bg-[#111827] border border-red-500/15 rounded-xl p-5">
         <h2 className="text-sm font-semibold text-red-400 mb-2">Danger Zone</h2>
         <p className="text-xs text-slate-500 mb-3">Permanently deletes this agent from Okta and removes all data.</p>
-        <DeleteAgentButton agentId={agent.id} agentName={agent.name} />
+        <ClientDeleteButton agentId={agent.id} agentName={agent.name} status={liveStatus} />
       </section>
     </div>
-  );
-}
-
-// Inline delete button component
-function DeleteAgentButton({ agentId, agentName }: { agentId: string; agentName: string }) {
-  return (
-    // Delegate to client component
-    <ClientDeleteButton agentId={agentId} agentName={agentName} />
   );
 }
 

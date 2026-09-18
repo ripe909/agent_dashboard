@@ -5,7 +5,7 @@ import { Trash2 } from 'lucide-react';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
-export default function DeleteAgent({ agentId, agentName }: { agentId: string; agentName: string }) {
+export default function DeleteAgent({ agentId, agentName, status }: { agentId: string; agentName: string; status?: string }) {
   const router = useRouter();
   const [confirm, setConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -14,6 +14,19 @@ export default function DeleteAgent({ agentId, agentName }: { agentId: string; a
     setLoading(true);
     await fetch(`${BACKEND}/api/agents/${agentId}`, { method: 'DELETE' });
     router.push('/agents');
+  }
+
+  const isActive = status?.toLowerCase() === 'active';
+
+  if (isActive) {
+    return (
+      <div>
+        <button disabled className="flex items-center gap-2 px-3 py-2 border border-slate-700 text-slate-600 text-xs font-semibold rounded-lg cursor-not-allowed opacity-60">
+          <Trash2 className="w-3.5 h-3.5" /> Delete Agent
+        </button>
+        <p className="text-[11px] text-slate-600 mt-2">Deactivate the agent above before deleting it.</p>
+      </div>
+    );
   }
 
   if (confirm) {
