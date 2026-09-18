@@ -19,6 +19,12 @@ export default async function AgentDetailPage({ params }: { params: { id: string
     notFound();
   }
 
+  let streamlinedUserAccess = true;
+  try {
+    const settings = await apiFetch<any>('/api/settings');
+    streamlinedUserAccess = !!settings.streamlinedUserAccess;
+  } catch {}
+
   const liveStatus = agent.okta?.status || agent.status;
   const oktaOwner = agent.oktaOwners?.[0];
   const currentOwner = oktaOwner
@@ -102,7 +108,7 @@ export default async function AgentDetailPage({ params }: { params: { id: string
           <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
           User Access
         </h2>
-        <UserAccess agentId={agent.id} enabled={!!agent.userAccessEnabled} />
+        <UserAccess agentId={agent.id} enabled={!!agent.userAccessEnabled} streamlined={streamlinedUserAccess} />
       </section>
 
       {/* Machine Access */}

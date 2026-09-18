@@ -314,6 +314,50 @@ export async function setAgentResourceUrl(agentId: string, resourceUrl: string):
   await patchAIAgent(agentId, { resourceUrl });
 }
 
+// Okta creates the backing OIDC app INACTIVE — assigning a user to an inactive app fails with a
+// misleading "AppInstance not found" 404. It must be activated first. Re-activating an already
+// active app is a no-op on Okta's side.
+export async function activateApp(appId: string): Promise<void> {
+  const res = await sswsFetch(`/api/v1/apps/${appId}/lifecycle/activate`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json() as any;
+    throw new Error(err.errorSummary || `activateApp ${res.status}`);
+  }
+}
+
+export async function assignUserToApp(appId: string, userId: string): Promise<void> {
+  const res = await sswsFetch(`/api/v1/apps/${appId}/users`, {
+    method: 'POST', body: JSON.stringify({ id: userId }),
+  });
+  if (!res.ok) {
+    const err = await res.json() as any;
+    throw new Error(err.errorSummary || `assignUserToApp ${res.status}`);
+  }
+}
+
+export async function listAppUsers(appId: string): Promise<OktaUser[]> {
+  const res = await sswsFetch(`/api/v1/apps/${appId}/users`);
+  if (!res.ok) throw new Error(`listAppUsers ${res.status}: ${await res.text()}`);
+  const appUsers = await res.json() as any[];
+  const users = await Promise.all(appUsers.map((au) => getUser(au.id).catch(() => null)));
+  return users.filter((u): u is OktaUser => !!u);
+}
+
+// Orchestrates the streamlined flow: ensure the agent has a backing OIDC app, ensure it's
+// active, and return its appId — ready for assignUserToApp. Safe to call repeatedly; each
+// step is a no-op if already done.
+export async function ensureUserAccess(agentId: string): Promise<string> {
+  let agent = await getAIAgent(agentId);
+  if (!agent.signOnProvider?.appInstanceId) {
+    await enableUserAccess(agentId);
+    agent = await getAIAgent(agentId);
+  }
+  const appId = agent.signOnProvider?.appInstanceId;
+  if (!appId) throw new Error('Failed to provision a backing app for this agent');
+  await activateApp(appId);
+  return appId;
+}
+
 export function orgIdFromAgentOrn(orn: string): string {
   // orn:<env>:directory:<orgId>:workload-principals:ai-agents:<id>
   return orn.split(':')[3];

@@ -1,12 +1,13 @@
 import { randomUUID } from 'crypto';
 import { Agent, Resource } from './schema';
-import { Store, AgentPatch, NewAgent } from './store';
+import { Store, AgentPatch, NewAgent, AppSettings, DEFAULT_SETTINGS } from './store';
 import { DEFAULT_RESOURCES } from './postgresStore';
 
 export class MemoryStore implements Store {
   private agentsById = new Map<string, Agent>();
   private resourcesById = new Map<string, Resource>();
   private agentResourceIds = new Map<string, Set<string>>();
+  private settings: AppSettings = { ...DEFAULT_SETTINGS };
 
   async listAgents(): Promise<Agent[]> {
     return [...this.agentsById.values()];
@@ -71,6 +72,15 @@ export class MemoryStore implements Store {
 
   async listResources(): Promise<Resource[]> {
     return [...this.resourcesById.values()];
+  }
+
+  async getSettings(): Promise<AppSettings> {
+    return { ...this.settings };
+  }
+
+  async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+    this.settings = { ...this.settings, ...patch };
+    return { ...this.settings };
   }
 
   async init(): Promise<void> {

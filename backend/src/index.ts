@@ -5,6 +5,7 @@ import agentsRouter, { syncAllOwners } from './routes/agents';
 import usersRouter from './routes/users';
 import resourcesRouter from './routes/resources';
 import connectionsRouter from './routes/connections';
+import settingsRouter from './routes/settings';
 import { eventBus, OktaApiEvent } from './services/eventBus';
 import { store } from './db/client';
 
@@ -64,6 +65,7 @@ app.use('/api/agents', agentsRouter);
 app.use('/api/agents', connectionsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/resources', resourcesRouter);
+app.use('/api/settings', settingsRouter);
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);

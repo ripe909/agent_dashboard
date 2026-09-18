@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { eq } from 'drizzle-orm';
 import * as schema from './schema';
 import { agents, agentResources, resources, Agent, Resource } from './schema';
-import { Store, AgentPatch, NewAgent } from './store';
+import { Store, AgentPatch, NewAgent, AppSettings, DEFAULT_SETTINGS } from './store';
 
 const dbUrl = process.env.DATABASE_URL || '';
 // Hosted Postgres providers generally require SSL; local dev doesn't.
@@ -71,6 +71,11 @@ async function migrate() {
       assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (agent_id, resource_id)
     );
+    CREATE TABLE IF NOT EXISTS settings (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      data JSONB NOT NULL,
+      CONSTRAINT settings_single_row CHECK (id = 1)
+    );
   `);
 }
 
@@ -99,6 +104,13 @@ async function seedResources() {
     );
   }
   console.log(`✅ Seeded ${DEFAULT_RESOURCES.length} default resources`);
+}
+
+async function seedSettings() {
+  await pool.query(
+    'INSERT INTO settings (id, data) VALUES (1, $1) ON CONFLICT (id) DO NOTHING',
+    [JSON.stringify(DEFAULT_SETTINGS)]
+  );
 }
 
 export class PostgresStore implements Store {
@@ -158,10 +170,26 @@ export class PostgresStore implements Store {
     return withRetry(() => db.select().from(resources));
   }
 
+  async getSettings(): Promise<AppSettings> {
+    const { rows } = await withRetry(() => pool.query('SELECT data FROM settings WHERE id = 1'));
+    return rows[0] ? { ...DEFAULT_SETTINGS, ...rows[0].data } : DEFAULT_SETTINGS;
+  }
+
+  async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+    const current = await this.getSettings();
+    const updated = { ...current, ...patch };
+    await withRetry(() => pool.query(
+      'INSERT INTO settings (id, data) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET data = $1',
+      [JSON.stringify(updated)]
+    ));
+    return updated;
+  }
+
   async init(): Promise<void> {
     await migrate();
     console.log('✅ Database migrated');
     await seedResources();
+    await seedSettings();
   }
 
   async keepAlive(): Promise<void> {

@@ -1,9 +1,11 @@
 'use client';
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
-import { Bot, Users, Puzzle, LayoutDashboard, LogOut } from 'lucide-react';
+import { Bot, Users, Puzzle, LayoutDashboard, LogOut, Settings } from 'lucide-react';
 import clsx from 'clsx';
+import SettingsModal from './SettingsModal';
 
 const links = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -18,6 +20,7 @@ interface Props {
 
 export default function Nav({ user }: Props) {
   const pathname = usePathname();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   return (
     <div className="w-60 flex flex-col bg-[#0d1525] border-r border-[#1e293b] flex-shrink-0">
       <div className="px-5 py-5 border-b border-[#1e293b]">
@@ -59,13 +62,24 @@ export default function Nav({ user }: Props) {
             <div className="text-xs text-slate-500 truncate">{user?.email}</div>
           </div>
         </div>
-        <button
-          onClick={() => signOut({ callbackUrl: '/login' })}
-          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-        >
-          <LogOut className="w-3.5 h-3.5" /> Sign out
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => signOut({ callbackUrl: '/login' })}
+            className="flex-1 flex items-center gap-2 px-3 py-2 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5" /> Sign out
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+            className="p-2 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors flex-shrink-0"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
+
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

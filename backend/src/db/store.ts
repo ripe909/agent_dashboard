@@ -5,6 +5,12 @@ import { MemoryStore } from './memoryStore';
 export type AgentPatch = Partial<Pick<Agent, 'name' | 'description' | 'status' | 'ownerId' | 'ownerName' | 'ownerEmail'>>;
 export type NewAgent = Pick<Agent, 'name' | 'oktaAgentId' | 'status'> & Partial<Pick<Agent, 'description' | 'createdBy'>>;
 
+export interface AppSettings {
+  streamlinedUserAccess: boolean;
+}
+
+export const DEFAULT_SETTINGS: AppSettings = { streamlinedUserAccess: true };
+
 export interface Store {
   listAgents(): Promise<Agent[]>;
   findAgentByOktaId(oktaAgentId: string): Promise<Agent | undefined>;
@@ -19,6 +25,9 @@ export interface Store {
   deleteAgentResourcesByAgentId(agentId: string): Promise<void>;
 
   listResources(): Promise<Resource[]>;
+
+  getSettings(): Promise<AppSettings>;
+  updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
 
   init(): Promise<void>;
   keepAlive(): Promise<void>;

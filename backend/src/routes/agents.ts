@@ -298,6 +298,37 @@ router.put('/:id/user-access', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/agents/:id/user-access/assign — streamlined flow: provision/activate the backing
+// OIDC app if needed, then assign a user to it, all in one request.
+router.post('/:id/user-access/assign', async (req: Request, res: Response) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId is required' });
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    const appId = await okta.ensureUserAccess(agent.oktaAgentId);
+    await okta.assignUserToApp(appId, userId);
+    res.status(201).json({ message: 'User assigned' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/agents/:id/user-access/users — users currently assigned to this agent's backing app
+router.get('/:id/user-access/users', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.json([]);
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    const appId = oktaAgent.signOnProvider?.appInstanceId;
+    if (!appId) return res.json([]);
+    const users = await okta.listAppUsers(appId);
+    res.json(users);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/agents/:id/authorization-servers — custom authorization servers available for delegation
 router.get('/:id/authorization-servers', async (req: Request, res: Response) => {
   try {
