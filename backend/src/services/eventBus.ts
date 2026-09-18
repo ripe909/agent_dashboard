@@ -54,6 +54,13 @@ export function labelForPath(method: string, path: string): string {
     if (method === 'POST') return 'Add Resource Owner (IGA)';
     if (method === 'PATCH') return 'Remove Resource Owner (IGA)';
   }
+  if (path.includes('/delegation-links')) {
+    if (method === 'GET') return 'List Machine Callers';
+    if (method === 'POST') return 'Add Machine Caller';
+  }
+  if (path.includes('/resource-servers/api/v1/a2a-servers/') && path.includes('/authorization-servers')) {
+    return 'Connect Authorization Server';
+  }
 
   for (const [regex, label] of PATH_LABELS) {
     if (regex.test(path)) return label;

@@ -6,7 +6,9 @@ import UserPicker from '@/components/UserPicker';
 import ResourcePicker from '@/components/ResourcePicker';
 import AgentLifecycle from './AgentLifecycle';
 import AgentCredentials from './AgentCredentials';
-import { ArrowLeft, Bot, Shield, Calendar, Key } from 'lucide-react';
+import UserAccess from './UserAccess';
+import MachineAccess from './MachineAccess';
+import { ArrowLeft, Bot, Shield, Calendar, Key, UserCheck, Cpu } from 'lucide-react';
 
 export default async function AgentDetailPage({ params }: { params: { id: string } }) {
   let agent: any;
@@ -88,6 +90,25 @@ export default async function AgentDetailPage({ params }: { params: { id: string
         <p className="text-[11px] text-slate-600 mt-3">
           Assigning an owner registers it directly in Okta&apos;s IGA governance registry for this agent.
         </p>
+      </section>
+
+      {/* User Access */}
+      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+          <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
+          User Access
+        </h2>
+        <UserAccess agentId={agent.id} enabled={!!agent.userAccessEnabled} />
+      </section>
+
+      {/* Machine Access */}
+      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+          <Cpu className="w-3.5 h-3.5 text-[#a78bfa]" />
+          Machine Access
+          <span className="text-xs text-slate-500 font-normal">— other AI agents authorized to call this agent</span>
+        </h2>
+        <MachineAccess agentId={agent.id} resourceUrl={agent.resourceUrl} />
       </section>
 
       {/* Connections */}

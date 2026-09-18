@@ -11,8 +11,9 @@ const ORG = () => process.env.OKTA_ORG_URL!;
 // The governance (IGA resource-owners) API lives on the admin hostname, not the org hostname.
 const GOV_ORG = () => toAdminUrl(ORG());
 const AUTH_MODE = () => process.env.OKTA_AUTH_MODE || 'api_token';
-// okta.governance.resourceOwner.{read,manage} must also be granted on the M2M app's API Scopes tab.
-const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage';
+// okta.governance.resourceOwner.{read,manage} and okta.authorizationServers.read must also be
+// granted on the M2M app's API Scopes tab.
+const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage okta.authorizationServers.read';
 
 function toAdminUrl(orgUrl: string): string {
   return orgUrl
@@ -200,6 +201,8 @@ export interface OktaAIAgent {
   id: string; platform: string; status: string; appId?: string;
   profile: { name: string; description?: string };
   created?: string; lastUpdated?: string; _links?: any;
+  signOnProvider?: { appInstanceId?: string };
+  resourceUrl?: string;
 }
 
 async function pollOperation(opUrl: string, maxAttempts = 15): Promise<string> {
@@ -283,6 +286,107 @@ export async function deactivateAIAgent(agentId: string): Promise<void> {
     const err = await res.json() as any;
     throw new Error(err.errorSummary || `deactivateAgent ${res.status}`);
   }
+}
+
+// ── User Access (human sign-in) / Machine Access (agent-to-agent delegation) ──
+
+async function patchAIAgent(agentId: string, body: any): Promise<void> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}`, {
+    method: 'PATCH', body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/merge-patch+json' },
+  });
+  if (res.status === 202) {
+    const opUrl = res.headers.get('Location');
+    if (opUrl) await pollOperation(opUrl);
+    return;
+  }
+  if (!res.ok) {
+    const err = await res.json() as any;
+    throw new Error(err.errorSummary || `patchAIAgent ${res.status}`);
+  }
+}
+
+export async function enableUserAccess(agentId: string): Promise<void> {
+  await patchAIAgent(agentId, { signOnProvider: { type: 'NEW_OIDC_APP' } });
+}
+
+export async function setAgentResourceUrl(agentId: string, resourceUrl: string): Promise<void> {
+  await patchAIAgent(agentId, { resourceUrl });
+}
+
+export function orgIdFromAgentOrn(orn: string): string {
+  // orn:<env>:directory:<orgId>:workload-principals:ai-agents:<id>
+  return orn.split(':')[3];
+}
+
+export function buildAuthorizationServerOrn(authServerId: string, orgId: string): string {
+  return `orn:oktapreview:idp:${orgId}:authorization_servers:${authServerId}`;
+}
+
+export interface AuthorizationServer { id: string; name: string; orn: string; }
+
+export async function listAuthorizationServers(orgId: string): Promise<AuthorizationServer[]> {
+  const res = await sswsFetch('/api/v1/authorizationServers');
+  if (!res.ok) throw new Error(`listAuthorizationServers ${res.status}: ${await res.text()}`);
+  const servers = await res.json() as any[];
+  return servers.map((s) => ({ id: s.id, name: s.name, orn: buildAuthorizationServerOrn(s.id, orgId) }));
+}
+
+// The agent's own /ai-agents/{id} response never includes resourceUrl — it only shows up on the
+// auto-created a2a resource server once set (and can't be changed after that point).
+export async function getAgentResourceUrl(agentId: string): Promise<string | undefined> {
+  const res = await sswsFetch(`/resource-servers/api/v1/a2a-servers/${agentId}`);
+  if (res.status === 404) return undefined;
+  if (!res.ok) throw new Error(`getAgentResourceUrl ${res.status}: ${await res.text()}`);
+  const data = await res.json() as any;
+  return data.resourceUrl;
+}
+
+export async function connectAuthorizationServer(agentId: string, authServerOrn: string): Promise<void> {
+  const res = await sswsFetch(`/resource-servers/api/v1/a2a-servers/${agentId}/authorization-servers`, {
+    method: 'POST', body: JSON.stringify({ orn: authServerOrn, type: 'OKTA' }),
+  });
+  if (res.status !== 204 && !res.ok) {
+    const err = await res.json() as any;
+    throw new Error(err.errorSummary || `connectAuthorizationServer ${res.status}`);
+  }
+}
+
+export async function createDelegationLink(callerOrn: string, targetOrn: string, authServerOrn: string): Promise<void> {
+  // Newly-connected authorization servers (connectAuthorizationServer) can take a moment to
+  // propagate before delegation-links accepts them — retry briefly on that specific validation error.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await sswsFetch('/workload-principals/api/v1/delegation-links', {
+      method: 'POST',
+      body: JSON.stringify({
+        from: { type: 'OKTA_AUTHORIZATION_SERVER', clientOrn: callerOrn, tokenType: 'ACCESS_TOKEN' },
+        to: { resourceOrn: targetOrn, authorizationServerOrn: authServerOrn },
+      }),
+    });
+    if (res.ok) return;
+
+    const err = await res.json() as any;
+    const isPropagationDelay = err.errorCauses?.some((c: any) => c.location === 'to.authorizationServerOrn');
+    if (isPropagationDelay && attempt < 4) {
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      continue;
+    }
+    throw new Error(err.errorSummary || `createDelegationLink ${res.status}`);
+  }
+}
+
+export interface DelegationLink { id: string; callerOrn: string; authorizationServerOrn: string; }
+
+export async function listDelegationLinksTo(targetOrn: string): Promise<DelegationLink[]> {
+  const filter = encodeURIComponent(`to.resourceOrn eq "${targetOrn}"`);
+  const res = await sswsFetch(`/workload-principals/api/v1/delegation-links?filter=${filter}&limit=20`);
+  if (!res.ok) throw new Error(`listDelegationLinksTo ${res.status}: ${await res.text()}`);
+  const data = await res.json() as { data: any[] };
+  return (data.data || []).map((d) => ({
+    id: d.id,
+    callerOrn: d.from?.clientOrn || '',
+    authorizationServerOrn: d.to?.authorizationServerOrn || '',
+  }));
 }
 
 // ── Agent Credentials ─────────────────────────────────────────────────────────

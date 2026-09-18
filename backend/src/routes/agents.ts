@@ -108,6 +108,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     let credentials: any = null;
     let adminConsoleUrl: string | undefined;
     let oktaOwners: okta.ResourceOwner[] = [];
+    let resourceUrl: string | undefined;
     if (agent.oktaAgentId) {
       try {
         oktaData = await okta.getAIAgent(agent.oktaAgentId);
@@ -119,6 +120,7 @@ router.get('/:id', async (req: Request, res: Response) => {
         adminConsoleUrl = await okta.getAgentAdminUrl(agent.oktaAgentId);
       } catch {}
       try { oktaOwners = await okta.listResourceOwners(agent.oktaAgentId); } catch {}
+      try { resourceUrl = await okta.getAgentResourceUrl(agent.oktaAgentId); } catch {}
     }
 
     res.json({
@@ -128,6 +130,8 @@ router.get('/:id', async (req: Request, res: Response) => {
       credentials,
       adminConsoleUrl,
       oktaOwners,
+      userAccessEnabled: !!oktaData?.signOnProvider,
+      resourceUrl,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -231,6 +235,97 @@ router.post('/:id/credentials/jwk', async (req: Request, res: Response) => {
     if (oktaAgent.appId) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
     const result = await okta.createAgentJwk(agent.oktaAgentId);
     res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/agents/:id/user-access — enable human sign-in through this agent
+router.put('/:id/user-access', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    await okta.enableUserAccess(agent.oktaAgentId);
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    res.json({ userAccessEnabled: !!oktaAgent.signOnProvider });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/agents/:id/authorization-servers — custom authorization servers available for delegation
+router.get('/:id/authorization-servers', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.json([]);
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    const agentOrn = okta.agentOrnFromLinks(oktaAgent._links);
+    if (!agentOrn) return res.json([]);
+    const servers = await okta.listAuthorizationServers(okta.orgIdFromAgentOrn(agentOrn));
+    res.json(servers);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/agents/:id/delegations — list agents/apps currently authorized to call this agent
+router.get('/:id/delegations', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.json([]);
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    const targetOrn = okta.agentOrnFromLinks(oktaAgent._links);
+    if (!targetOrn) return res.json([]);
+
+    const links = await okta.listDelegationLinksTo(targetOrn);
+    const withCallers = await Promise.all(links.map(async (link) => {
+      const callerId = link.callerOrn.split(':').pop();
+      let callerName = callerId;
+      try {
+        const caller = await okta.getAIAgent(callerId!);
+        callerName = caller.profile.name;
+      } catch {}
+      return { id: link.id, callerAgentId: callerId, callerName };
+    }));
+    res.json(withCallers);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/delegations — authorize another AI agent to call this agent
+router.post('/:id/delegations', async (req: Request, res: Response) => {
+  const { callerAgentId, authorizationServerId } = req.body;
+  if (!callerAgentId || !authorizationServerId) {
+    return res.status(400).json({ error: 'callerAgentId and authorizationServerId are required' });
+  }
+  try {
+    const target = await store.findAgentById(req.params.id);
+    if (!target?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    const caller = await store.findAgentById(callerAgentId);
+    if (!caller?.oktaAgentId) return res.status(404).json({ error: 'Calling agent not found' });
+
+    const targetOktaAgent = await okta.getAIAgent(target.oktaAgentId);
+    const targetOrn = okta.agentOrnFromLinks(targetOktaAgent._links);
+    if (!targetOrn) return res.status(400).json({ error: 'Could not resolve target agent ORN' });
+
+    const callerOktaAgent = await okta.getAIAgent(caller.oktaAgentId);
+    const callerOrn = okta.agentOrnFromLinks(callerOktaAgent._links);
+    if (!callerOrn) return res.status(400).json({ error: 'Could not resolve calling agent ORN' });
+
+    const orgId = okta.orgIdFromAgentOrn(targetOrn);
+    const authServerOrn = okta.buildAuthorizationServerOrn(authorizationServerId, orgId);
+
+    const existingResourceUrl = await okta.getAgentResourceUrl(target.oktaAgentId);
+    if (!existingResourceUrl) {
+      const { resourceUrl } = req.body;
+      if (!resourceUrl) return res.status(400).json({ error: 'resourceUrl is required the first time a caller is added to this agent' });
+      await okta.setAgentResourceUrl(target.oktaAgentId, resourceUrl);
+    }
+
+    await okta.connectAuthorizationServer(target.oktaAgentId, authServerOrn);
+    await okta.createDelegationLink(callerOrn, targetOrn, authServerOrn);
+    res.status(201).json({ message: 'Caller authorized' });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
