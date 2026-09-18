@@ -8,6 +8,7 @@ import AgentLifecycle from './AgentLifecycle';
 import AgentCredentials from './AgentCredentials';
 import UserAccess from './UserAccess';
 import MachineAccess from './MachineAccess';
+import SyncOwnersButton from '@/components/SyncOwnersButton';
 import { ArrowLeft, Bot, Shield, Calendar, Key, UserCheck, Cpu } from 'lucide-react';
 
 export default async function AgentDetailPage({ params }: { params: { id: string } }) {
@@ -82,10 +83,13 @@ export default async function AgentDetailPage({ params }: { params: { id: string
 
       {/* Owner */}
       <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
-        <h2 className="text-sm font-semibold text-white flex items-center gap-2 mb-4">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#1662dd]" />
-          Owner
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#1662dd]" />
+            Owner
+          </h2>
+          <SyncOwnersButton scope={{ agentId: agent.id }} />
+        </div>
         <UserPicker agentId={agent.id} currentOwner={currentOwner} />
         <p className="text-[11px] text-slate-600 mt-3">
           Assigning an owner registers it directly in Okta&apos;s IGA governance registry for this agent.

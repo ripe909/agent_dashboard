@@ -23,6 +23,40 @@ async function upsertAgent(oktaAgent: okta.OktaAIAgent) {
   });
 }
 
+// ── Sync helper: pull the live Okta owner into the local cache ───────────────
+async function syncOwnerForAgent(localId: string, oktaAgent: okta.OktaAIAgent) {
+  const agentOrn = okta.agentOrnFromLinks(oktaAgent._links);
+  const owners = agentOrn ? await okta.listResourceOwnersByOrn(agentOrn).catch(() => []) : [];
+  const owner = owners[0];
+  return store.updateAgentById(localId, {
+    ownerId: owner?.id ?? null,
+    ownerName: owner?.name ?? null,
+    ownerEmail: owner?.email ?? null,
+  });
+}
+
+// Full resync: pulls every Okta agent + its live owner into the local store.
+// Used both by the manual "sync owners" endpoints and once at backend startup.
+export async function syncAllOwners(): Promise<number> {
+  const oktaAgents = await okta.listAIAgents(200);
+  const results = await Promise.all(oktaAgents.map(async (oktaAgent) => {
+    const local = await upsertAgent(oktaAgent);
+    await syncOwnerForAgent(local.id, oktaAgent);
+  }));
+  return results.length;
+}
+
+// POST /api/agents/sync-owners — refresh the local owner cache for every agent from Okta.
+// Mounted before /:id so this literal path isn't swallowed by the :id param.
+router.post('/sync-owners', async (_req: Request, res: Response) => {
+  try {
+    const count = await syncAllOwners();
+    res.json({ synced: count });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/agents — Okta is the source of truth: only return agents that exist in Okta
 router.get('/', async (_req: Request, res: Response) => {
   try {
@@ -41,14 +75,13 @@ router.get('/', async (_req: Request, res: Response) => {
     }));
 
     // Return only agents that exist in Okta, enriched with local metadata
+    // (owner fields come from the local cache — see syncOwnerForAgent/syncAllOwners
+    // for how that cache gets populated; this route does not call Okta's IGA API)
     const withCounts = await Promise.all(
       oktaAgents.map(async (oktaAgent) => {
         // Find or create the local row
         const local = await store.findAgentByOktaId(oktaAgent.id);
         const linked = local ? await store.listAgentResourceIds(local.id) : [];
-        const agentOrn = okta.agentOrnFromLinks(oktaAgent._links);
-        const oktaOwners = agentOrn ? await okta.listResourceOwnersByOrn(agentOrn).catch(() => []) : [];
-        const liveOwner = oktaOwners[0];
         return {
           ...(local || {}),
           oktaAgentId: oktaAgent.id,
@@ -57,9 +90,6 @@ router.get('/', async (_req: Request, res: Response) => {
           status: oktaAgent.status.toLowerCase(),
           oktaStatus: oktaAgent.status,
           resourceCount: linked.length,
-          ownerId: liveOwner?.id ?? (local as any)?.ownerId,
-          ownerName: liveOwner?.name ?? (local as any)?.ownerName,
-          ownerEmail: liveOwner?.email ?? (local as any)?.ownerEmail,
         };
       })
     );
@@ -107,7 +137,10 @@ router.get('/:id', async (req: Request, res: Response) => {
     let oktaData: any = null;
     let credentials: any = null;
     let adminConsoleUrl: string | undefined;
-    let oktaOwners: okta.ResourceOwner[] = [];
+    // Owner comes from the local cache (see syncOwnerForAgent/syncAllOwners), not a live Okta call.
+    const oktaOwners: okta.ResourceOwner[] = agent.ownerId
+      ? [{ id: agent.ownerId, name: agent.ownerName || '', email: agent.ownerEmail || '' }]
+      : [];
     let resourceUrl: string | undefined;
     if (agent.oktaAgentId) {
       try {
@@ -119,7 +152,6 @@ router.get('/:id', async (req: Request, res: Response) => {
         }
         adminConsoleUrl = await okta.getAgentAdminUrl(agent.oktaAgentId);
       } catch {}
-      try { oktaOwners = await okta.listResourceOwners(agent.oktaAgentId); } catch {}
       try { resourceUrl = await okta.getAgentResourceUrl(agent.oktaAgentId); } catch {}
     }
 
@@ -164,6 +196,19 @@ router.put('/:id/owner', async (req: Request, res: Response) => {
     }
 
     res.json({ ...updated, adminConsoleUrl, ownerNote });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/sync-owner — refresh this agent's owner cache from Okta's IGA registry
+router.post('/:id/sync-owner', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    const updated = await syncOwnerForAgent(agent.id, oktaAgent);
+    res.json(updated);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import StatusBadge from '@/components/StatusBadge';
+import SyncOwnersButton from '@/components/SyncOwnersButton';
 import { Bot, Plus, User, Puzzle, Shield, Zap } from 'lucide-react';
 
 interface AgentRow {
@@ -25,9 +26,12 @@ export default async function AgentsPage() {
             {agents.length} agent{agents.length !== 1 ? 's' : ''} registered in Okta — live sync
           </p>
         </div>
-        <Link href="/agents/new" className="flex items-center gap-2 px-4 py-2 bg-[#1662dd] hover:bg-blue-600 text-white text-sm font-semibold rounded-lg transition-colors">
-          <Plus className="w-4 h-4" /> New Agent
-        </Link>
+        <div className="flex items-center gap-2">
+          <SyncOwnersButton scope="all" />
+          <Link href="/agents/new" className="flex items-center gap-2 px-4 py-2 bg-[#1662dd] hover:bg-blue-600 text-white text-sm font-semibold rounded-lg transition-colors">
+            <Plus className="w-4 h-4" /> New Agent
+          </Link>
+        </div>
       </div>
 
       {agents.length === 0 ? (

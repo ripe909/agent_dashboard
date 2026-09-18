@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import agentsRouter from './routes/agents';
+import agentsRouter, { syncAllOwners } from './routes/agents';
 import usersRouter from './routes/users';
 import resourcesRouter from './routes/resources';
 import connectionsRouter from './routes/connections';
@@ -88,6 +88,16 @@ async function start() {
         return setupDb(retries - 1);
       }
       console.error('❌ Store setup failed:', e.message);
+      return;
+    }
+
+    // Populate the local owner cache from Okta so it's never empty on a fresh boot
+    // (especially relevant in DB_MODE=memory, where the store always starts empty).
+    try {
+      const count = await syncAllOwners();
+      console.log(`✅ Synced owners for ${count} agent(s)`);
+    } catch (e: any) {
+      console.warn('⚠️  Initial owner sync failed (will retry on manual sync):', e.message);
     }
   };
   setupDb();
