@@ -28,26 +28,26 @@ export default function AgentPicker({ excludeAgentId, onSelect }: Props) {
 
   return (
     <div>
-      <div className="flex items-center gap-2 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2 mb-3">
-        <Search className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+      <div className="flex items-center gap-2 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2 mb-3">
+        <Search className="w-3.5 h-3.5 text-[var(--text-secondary)] flex-shrink-0" />
         <input
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search AI agents by name…"
-          className="flex-1 bg-transparent text-sm text-white placeholder-slate-600 outline-none min-w-0"
+          className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none min-w-0"
         />
         {query && (
-          <button onClick={() => setQuery('')} className="text-slate-500 hover:text-white">
+          <button onClick={() => setQuery('')} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
             <X className="w-3.5 h-3.5" />
           </button>
         )}
       </div>
-      {error && <div className="text-xs text-red-400 mb-2 px-1">{error}</div>}
+      {error && <div className="text-xs text-red-600 mb-2 px-1">{error}</div>}
       <div className="max-h-56 overflow-y-auto space-y-0.5">
-        {loading && <div className="text-xs text-slate-500 text-center py-4">Loading agents…</div>}
+        {loading && <div className="text-xs text-[var(--text-secondary)] text-center py-4">Loading agents…</div>}
         {!loading && !error && filtered.length === 0 && (
-          <div className="text-xs text-slate-500 text-center py-4">
+          <div className="text-xs text-[var(--text-secondary)] text-center py-4">
             {query ? 'No agents match that search' : 'No other agents available'}
           </div>
         )}
@@ -55,14 +55,14 @@ export default function AgentPicker({ excludeAgentId, onSelect }: Props) {
           <button
             key={a.id}
             onClick={() => onSelect(a)}
-            className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 rounded-lg transition-colors text-left"
+            className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-[var(--bg-surface-muted)] rounded-lg transition-colors text-left"
           >
-            <div className="w-7 h-7 rounded-full bg-[#1662dd]/20 flex items-center justify-center flex-shrink-0">
-              <Bot className="w-3.5 h-3.5 text-[#60a5fa]" />
+            <div className="w-7 h-7 rounded-full bg-[#1662dd]/15 flex items-center justify-center flex-shrink-0">
+              <Bot className="w-3.5 h-3.5 text-[#1662dd]" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-sm text-white font-medium truncate">{a.name}</div>
-              {a.description && <div className="text-xs text-slate-500 truncate">{a.description}</div>}
+              <div className="text-sm text-[var(--text-primary)] font-medium truncate">{a.name}</div>
+              {a.description && <div className="text-xs text-[var(--text-secondary)] truncate">{a.description}</div>}
             </div>
           </button>
         ))}

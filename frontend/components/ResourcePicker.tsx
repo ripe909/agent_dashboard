@@ -187,23 +187,23 @@ export default function ResourcePicker({ agentId }: Props) {
       {/* Active connections list */}
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <span className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wide">
             Active Connections ({loadingConnections ? '…' : connections.length})
           </span>
           <button
             onClick={() => { setStep('type'); setError(''); }}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors"
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors"
           >
             <Plus className="w-3.5 h-3.5" /> Add resource connection
           </button>
         </div>
 
         {loadingConnections ? (
-          <div className="text-xs text-slate-500 text-center py-4">
+          <div className="text-xs text-[var(--text-secondary)] text-center py-4">
             <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Loading connections…
           </div>
         ) : connections.length === 0 ? (
-          <div className="text-xs text-slate-500 italic py-4 text-center border border-dashed border-[#1e293b] rounded-lg">
+          <div className="text-xs text-[var(--text-secondary)] italic py-4 text-center border border-dashed border-[var(--border-default)] rounded-lg">
             No resource connections yet
           </div>
         ) : (
@@ -213,23 +213,23 @@ export default function ResourcePicker({ agentId }: Props) {
               const Icon = typeDef?.icon || Shield;
               const colour = typeDef?.colour || '#64748b';
               return (
-                <div key={c.id} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
+                <div key={c.id} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${colour}1a` }}>
                     <Icon className="w-4 h-4" style={{ color: colour }} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{connectionName(c)}</div>
+                    <div className="text-sm font-medium text-[var(--text-primary)] truncate">{connectionName(c)}</div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-500 truncate">{typeDef?.label || c.connectionType}</span>
+                      <span className="text-xs text-[var(--text-secondary)] truncate">{typeDef?.label || c.connectionType}</span>
                       <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
-                        c.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-500/15 text-slate-400'
+                        c.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-[var(--bg-surface-muted)] text-[var(--text-secondary)]'
                       }`}>{c.status}</span>
                     </div>
                   </div>
                   <button
                     onClick={() => removeConnection(c.id)}
                     disabled={removing === c.id}
-                    className="text-slate-600 hover:text-red-400 transition-colors p-1 flex-shrink-0"
+                    className="text-[var(--text-muted)] hover:text-red-600 transition-colors p-1 flex-shrink-0"
                     title="Remove connection"
                   >
                     {removing === c.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
@@ -242,7 +242,7 @@ export default function ResourcePicker({ agentId }: Props) {
       </div>
 
       {error && (
-        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3 flex items-center justify-between">
+        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3 flex items-center justify-between">
           {error}
           <button onClick={() => setError('')}><X className="w-3 h-3" /></button>
         </div>
@@ -250,12 +250,12 @@ export default function ResourcePicker({ agentId }: Props) {
 
       {/* ── Step 1: Select resource type ── */}
       {step === 'type' && (
-        <div className="bg-[#0d1525] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-white">Add resource connection</h3>
-            <button onClick={() => setStep('closed')} className="text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Add resource connection</h3>
+            <button onClick={() => setStep('closed')} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
           </div>
-          <p className="text-xs text-slate-500 mb-4">Select a resource type</p>
+          <p className="text-xs text-[var(--text-secondary)] mb-4">Select a resource type</p>
           <div className="space-y-2">
             {RESOURCE_TYPES.map((type) => {
               const Icon = type.icon;
@@ -267,24 +267,24 @@ export default function ResourcePicker({ agentId }: Props) {
                   key={type.id}
                   onClick={() => { if (!loadingPotential) setStep(type.id); }}
                   disabled={loadingPotential}
-                  className="w-full flex items-center gap-3 px-4 py-3.5 bg-[#0a0f1e] border border-[#1e293b] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors disabled:opacity-50 group"
+                  className="w-full flex items-center gap-3 px-4 py-3.5 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors disabled:opacity-50 group"
                 >
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${type.colour}1a` }}>
                     <Icon className="w-4 h-4" style={{ color: type.colour }} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-white">{type.label}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">{type.description}</div>
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">{type.label}</div>
+                    <div className="text-xs text-[var(--text-secondary)] mt-0.5">{type.description}</div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {loadingPotential ? (
-                      <RefreshCw className="w-3 h-3 text-slate-600 animate-spin" />
+                      <RefreshCw className="w-3 h-3 text-[var(--text-muted)] animate-spin" />
                     ) : available > 0 ? (
-                      <span className="text-xs text-[#60a5fa] font-medium">{available} available</span>
+                      <span className="text-xs text-[#1662dd] font-medium">{available} available</span>
                     ) : (
-                      <span className="text-xs text-slate-600">None configured</span>
+                      <span className="text-xs text-[var(--text-muted)]">None configured</span>
                     )}
-                    <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-slate-400" />
+                    <ChevronRight className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--text-muted)]" />
                   </div>
                 </button>
               );
@@ -295,22 +295,22 @@ export default function ResourcePicker({ agentId }: Props) {
 
       {/* ── Step 2: Pick specific resource ── */}
       {selectedType && (
-        <div className="bg-[#0d1525] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
             <button
               onClick={() => setStep('type')}
-              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white"
+              className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]"
             >
               <ArrowLeft className="w-3.5 h-3.5" /> Back
             </button>
-            <span className="text-slate-600">·</span>
-            <h3 className="text-sm font-semibold text-white">{selectedType.label}</h3>
-            <button onClick={() => setStep('closed')} className="ml-auto text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+            <span className="text-[var(--text-muted)]">·</span>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">{selectedType.label}</h3>
+            <button onClick={() => setStep('closed')} className="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
           </div>
-          <p className="text-xs text-slate-500 mb-3">Select a resource</p>
+          <p className="text-xs text-[var(--text-secondary)] mb-3">Select a resource</p>
 
           {filteredConnections.length === 0 ? (
-            <div className="text-xs text-slate-500 text-center py-6 border border-dashed border-[#1e293b] rounded-lg">
+            <div className="text-xs text-[var(--text-secondary)] text-center py-6 border border-dashed border-[var(--border-default)] rounded-lg">
               {loadingPotential ? (
                 <><RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Loading…</>
               ) : (
@@ -330,19 +330,19 @@ export default function ResourcePicker({ agentId }: Props) {
                     key={idx}
                     onClick={() => addConnection(conn)}
                     disabled={!!adding}
-                    className="w-full flex items-center gap-3 px-3 py-3 bg-[#0a0f1e] border border-[#1e293b] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors disabled:opacity-50"
+                    className="w-full flex items-center gap-3 px-3 py-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors disabled:opacity-50"
                   >
                     <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${selectedType.colour}1a` }}>
                       <Icon className="w-3.5 h-3.5" style={{ color: selectedType.colour }} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-white truncate">{name}</div>
-                      {sub && <div className="text-xs text-slate-500 truncate font-mono">{sub}</div>}
+                      <div className="text-sm font-medium text-[var(--text-primary)] truncate">{name}</div>
+                      {sub && <div className="text-xs text-[var(--text-secondary)] truncate font-mono">{sub}</div>}
                     </div>
                     {isAdding ? (
-                      <RefreshCw className="w-4 h-4 text-[#60a5fa] animate-spin flex-shrink-0" />
+                      <RefreshCw className="w-4 h-4 text-[#1662dd] animate-spin flex-shrink-0" />
                     ) : (
-                      <Plus className="w-4 h-4 text-slate-600 flex-shrink-0" />
+                      <Plus className="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
                     )}
                   </button>
                 );

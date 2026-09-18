@@ -8,7 +8,7 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   if (!session) redirect('/login');
 
   return (
-    <div className="flex h-screen bg-[#0a0f1e] overflow-hidden">
+    <div className="flex h-screen bg-[var(--bg-page)] overflow-hidden">
       <Nav user={session.user as any} />
       <main className="flex-1 overflow-y-auto min-w-0">
         <div className="p-8">{children}</div>

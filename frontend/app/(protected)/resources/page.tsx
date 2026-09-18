@@ -1,4 +1,5 @@
 import { apiFetch } from '@/lib/api';
+import Breadcrumbs from '@/components/Breadcrumbs';
 import { Shield, Server, Zap, Link2, AlertCircle } from 'lucide-react';
 
 interface PotentialConnection {
@@ -93,9 +94,10 @@ export default async function ResourcesPage() {
 
   return (
     <div>
+      <Breadcrumbs items={[{ label: 'Applications and Resources' }, { label: 'Resources' }]} />
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Resources</h1>
-        <p className="text-slate-400 text-sm mt-1">
+        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Resources</h1>
+        <p className="text-[var(--text-secondary)] text-sm mt-1">
           {total > 0
             ? `${total} resource${total !== 1 ? 's' : ''} available in your Okta org — fetched live`
             : 'Resources available in your Okta org for connecting to AI agents'}
@@ -103,16 +105,16 @@ export default async function ResourcesPage() {
       </div>
 
       {fetchError && (
-        <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 mb-6 text-sm text-red-400">
+        <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-6 text-sm text-red-700">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {fetchError}
         </div>
       )}
 
       {total === 0 && !fetchError ? (
-        <div className="bg-[#111827] border border-[#1e293b] rounded-xl py-14 text-center">
-          <Server className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-          <div className="text-slate-400 text-sm">No resources found — backend may still be starting</div>
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg py-14 text-center">
+          <Server className="w-8 h-8 text-[var(--text-muted)] mx-auto mb-2" />
+          <div className="text-[var(--text-secondary)] text-sm">No resources found — backend may still be starting</div>
         </div>
       ) : (
         <div className="space-y-6">
@@ -131,10 +133,10 @@ export default async function ResourcesPage() {
                     <Icon className="w-4 h-4" style={{ color: cat.colour }} />
                   </div>
                   <div>
-                    <h2 className="text-sm font-semibold text-white">{cat.label}</h2>
-                    <p className="text-xs text-slate-500">{cat.description}</p>
+                    <h2 className="text-sm font-semibold text-[var(--text-primary)]">{cat.label}</h2>
+                    <p className="text-xs text-[var(--text-secondary)]">{cat.description}</p>
                   </div>
-                  <span className="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full bg-white/5 text-slate-400">
+                  <span className="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full bg-[var(--bg-surface-muted)] text-[var(--text-secondary)]">
                     {items.length}
                   </span>
                 </div>
@@ -148,7 +150,7 @@ export default async function ResourcesPage() {
                     return (
                       <div
                         key={idx}
-                        className="bg-[#111827] border border-[#1e293b] rounded-xl p-4"
+                        className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-4"
                       >
                         <div className="flex items-start gap-3">
                           <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
@@ -156,13 +158,13 @@ export default async function ResourcesPage() {
                             <Icon className="w-4 h-4" style={{ color: cat.colour }} />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-semibold text-white truncate">{name}</div>
+                            <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{name}</div>
                             {sub && (
-                              <div className="text-xs text-slate-500 mt-0.5 truncate font-mono">{sub}</div>
+                              <div className="text-xs text-[var(--text-secondary)] mt-0.5 truncate font-mono">{sub}</div>
                             )}
                             {orn && orn !== sub && (
                               <div className="mt-1.5">
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-slate-500 font-mono break-all line-clamp-2">
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--bg-surface-muted)] text-[var(--text-secondary)] font-mono break-all line-clamp-2">
                                   {orn}
                                 </span>
                               </div>

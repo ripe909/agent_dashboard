@@ -56,35 +56,35 @@ function StreamlinedMachineAccess({ agentId }: { agentId: string }) {
     <div>
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <span className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wide">
             Authorized Callers ({loadingCallers ? '…' : callers.length})
           </span>
           <button
             onClick={() => { setPicking((o) => !o); setError(''); }}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors"
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors"
           >
             <Plus className="w-3.5 h-3.5" /> Add caller
           </button>
         </div>
 
         {loadingCallers ? (
-          <div className="text-xs text-slate-500 text-center py-4">
+          <div className="text-xs text-[var(--text-secondary)] text-center py-4">
             <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Loading callers…
           </div>
         ) : callers.length === 0 ? (
-          <div className="text-xs text-slate-500 italic py-4 text-center border border-dashed border-[#1e293b] rounded-lg">
+          <div className="text-xs text-[var(--text-secondary)] italic py-4 text-center border border-dashed border-[var(--border-default)] rounded-lg">
             No authorized callers yet
           </div>
         ) : (
           <div className="space-y-2">
             {callers.map((c) => (
-              <div key={c.id} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
+              <div key={c.id} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
                 <div className="w-8 h-8 rounded-lg bg-[#a78bfa]/15 flex items-center justify-center flex-shrink-0">
                   <Bot className="w-4 h-4 text-[#a78bfa]" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-white truncate">{c.callerName}</div>
-                  <div className="text-xs text-slate-500">AI agent</div>
+                  <div className="text-sm font-medium text-[var(--text-primary)] truncate">{c.callerName}</div>
+                  <div className="text-xs text-[var(--text-secondary)]">AI agent</div>
                 </div>
               </div>
             ))}
@@ -93,18 +93,18 @@ function StreamlinedMachineAccess({ agentId }: { agentId: string }) {
       </div>
 
       {error && !picking && (
-        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">{error}</div>
+        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">{error}</div>
       )}
 
       {picking && (
-        <div className="bg-[#0d1525] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-white">Select the calling agent</h3>
-            <button onClick={() => setPicking(false)} className="text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Select the calling agent</h3>
+            <button onClick={() => setPicking(false)} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
           </div>
-          {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2 mb-3">{error}</div>}
+          {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 mb-3">{error}</div>}
           {assigning ? (
-            <div className="text-xs text-slate-500 text-center py-6">
+            <div className="text-xs text-[var(--text-secondary)] text-center py-6">
               <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Authorizing…
             </div>
           ) : (
@@ -186,35 +186,35 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl }: { age
     <div>
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <span className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wide">
             Authorized Callers ({loadingCallers ? '…' : callers.length})
           </span>
           <button
             onClick={openWizard}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors"
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors"
           >
             <Plus className="w-3.5 h-3.5" /> Add caller
           </button>
         </div>
 
         {loadingCallers ? (
-          <div className="text-xs text-slate-500 text-center py-4">
+          <div className="text-xs text-[var(--text-secondary)] text-center py-4">
             <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Loading callers…
           </div>
         ) : callers.length === 0 ? (
-          <div className="text-xs text-slate-500 italic py-4 text-center border border-dashed border-[#1e293b] rounded-lg">
+          <div className="text-xs text-[var(--text-secondary)] italic py-4 text-center border border-dashed border-[var(--border-default)] rounded-lg">
             No authorized callers yet
           </div>
         ) : (
           <div className="space-y-2">
             {callers.map((c) => (
-              <div key={c.id} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
+              <div key={c.id} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
                 <div className="w-8 h-8 rounded-lg bg-[#a78bfa]/15 flex items-center justify-center flex-shrink-0">
                   <Bot className="w-4 h-4 text-[#a78bfa]" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-white truncate">{c.callerName}</div>
-                  <div className="text-xs text-slate-500">AI agent</div>
+                  <div className="text-sm font-medium text-[var(--text-primary)] truncate">{c.callerName}</div>
+                  <div className="text-xs text-[var(--text-secondary)]">AI agent</div>
                 </div>
               </div>
             ))}
@@ -223,33 +223,33 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl }: { age
       </div>
 
       {error && step === 'closed' && (
-        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">{error}</div>
+        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">{error}</div>
       )}
 
       {/* Step 1: select caller type */}
       {step === 'type' && (
-        <div className="bg-[#0d1525] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-white">What is calling this agent?</h3>
-            <button onClick={() => setStep('closed')} className="text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">What is calling this agent?</h3>
+            <button onClick={() => setStep('closed')} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={() => setStep('agent')}
-              className="flex flex-col items-start gap-2 px-4 py-3.5 bg-[#0a0f1e] border border-[#1e293b] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors"
+              className="flex flex-col items-start gap-2 px-4 py-3.5 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors"
             >
               <div className="w-8 h-8 rounded-lg bg-[#a78bfa]/15 flex items-center justify-center">
                 <Bot className="w-4 h-4 text-[#a78bfa]" />
               </div>
-              <div className="text-sm font-semibold text-white">AI agent</div>
-              <div className="text-xs text-slate-500">Another AI agent registered in Okta.</div>
+              <div className="text-sm font-semibold text-[var(--text-primary)]">AI agent</div>
+              <div className="text-xs text-[var(--text-secondary)]">Another AI agent registered in Okta.</div>
             </button>
-            <div className="flex flex-col items-start gap-2 px-4 py-3.5 bg-[#0a0f1e]/50 border border-[#1e293b] rounded-lg text-left opacity-50 cursor-not-allowed">
+            <div className="flex flex-col items-start gap-2 px-4 py-3.5 bg-[var(--bg-surface-muted)]/50 border border-[var(--border-default)] rounded-lg text-left opacity-50 cursor-not-allowed">
               <div className="w-8 h-8 rounded-lg bg-slate-500/15 flex items-center justify-center">
-                <Blocks className="w-4 h-4 text-slate-500" />
+                <Blocks className="w-4 h-4 text-[var(--text-secondary)]" />
               </div>
-              <div className="text-sm font-semibold text-slate-400">Application or service</div>
-              <div className="text-xs text-slate-600">Coming soon</div>
+              <div className="text-sm font-semibold text-[var(--text-muted)]">Application or service</div>
+              <div className="text-xs text-[var(--text-muted)]">Coming soon</div>
             </div>
           </div>
         </div>
@@ -257,14 +257,14 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl }: { age
 
       {/* Step 2: pick the calling agent */}
       {step === 'agent' && (
-        <div className="bg-[#0d1525] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
-            <button onClick={() => setStep('type')} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white">
+            <button onClick={() => setStep('type')} className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">
               <ArrowLeft className="w-3.5 h-3.5" /> Back
             </button>
-            <span className="text-slate-600">·</span>
-            <h3 className="text-sm font-semibold text-white">Select the calling agent</h3>
-            <button onClick={() => setStep('closed')} className="ml-auto text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+            <span className="text-[var(--text-muted)]">·</span>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Select the calling agent</h3>
+            <button onClick={() => setStep('closed')} className="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
           </div>
           <AgentPicker
             excludeAgentId={agentId}
@@ -275,58 +275,58 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl }: { age
 
       {/* Step 3: authorization server + audience, then save */}
       {step === 'details' && selectedAgent && (
-        <div className="bg-[#0d1525] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
-            <button onClick={() => setStep('agent')} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white">
+            <button onClick={() => setStep('agent')} className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">
               <ArrowLeft className="w-3.5 h-3.5" /> Back
             </button>
-            <span className="text-slate-600">·</span>
-            <h3 className="text-sm font-semibold text-white">Configure access</h3>
-            <button onClick={() => setStep('closed')} className="ml-auto text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+            <span className="text-[var(--text-muted)]">·</span>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Configure access</h3>
+            <button onClick={() => setStep('closed')} className="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
           </div>
 
-          <div className="flex items-center gap-2 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5 mb-4">
+          <div className="flex items-center gap-2 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5 mb-4">
             <Cpu className="w-4 h-4 text-[#a78bfa] flex-shrink-0" />
-            <span className="text-sm text-white truncate">{selectedAgent.name}</span>
+            <span className="text-sm text-[var(--text-primary)] truncate">{selectedAgent.name}</span>
           </div>
 
           {needsAudience && (
             <div className="mb-4">
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
+              <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
                 Audience / Resource URL
               </label>
               <input
                 value={audienceInput}
                 onChange={(e) => setAudienceInput(e.target.value)}
                 placeholder="https://your-agent"
-                className="w-full bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-[#1662dd]/40"
+                className="w-full bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[#1662dd]/40"
               />
-              <p className="text-[11px] text-amber-300/80 mt-1.5">
+              <p className="text-[11px] text-amber-700/80 mt-1.5">
                 Identifies this agent as a protected resource. Cannot be changed after saving.
               </p>
             </div>
           )}
 
           <div className="mb-4">
-            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">
+            <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
               Authorization server
             </label>
             <select
               value={selectedAuthServerId}
               onChange={(e) => setSelectedAuthServerId(e.target.value)}
-              className="w-full bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-[#1662dd]/40"
+              className="w-full bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5 text-sm text-[var(--text-primary)] outline-none focus:border-[#1662dd]/40"
             >
               <option value="">Select a custom authorization server…</option>
               {authServers.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-            <p className="text-[11px] text-slate-600 mt-1.5">
+            <p className="text-[11px] text-[var(--text-muted)] mt-1.5">
               The Okta org authorization server isn&apos;t supported for machine callers.
             </p>
           </div>
 
-          {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2 mb-3">{error}</div>}
+          {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 mb-3">{error}</div>}
 
           <button
             onClick={submit}

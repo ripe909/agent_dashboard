@@ -1,15 +1,37 @@
 import { notFound } from 'next/navigation';
-import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import StatusBadge from '@/components/StatusBadge';
-import UserPicker from '@/components/UserPicker';
-import ResourcePicker from '@/components/ResourcePicker';
-import AgentLifecycle from './AgentLifecycle';
-import AgentCredentials from './AgentCredentials';
-import UserAccess from './UserAccess';
-import MachineAccess from './MachineAccess';
-import SyncOwnersButton from '@/components/SyncOwnersButton';
-import { ArrowLeft, Bot, Shield, Calendar, Key, UserCheck, Cpu } from 'lucide-react';
+import Breadcrumbs from '@/components/Breadcrumbs';
+import AgentDetailTabs from './AgentDetailTabs';
+import AgentActionsMenu from './AgentActionsMenu';
+import { Bot, ExternalLink } from 'lucide-react';
+
+const OKTA_ORG = process.env.NEXT_PUBLIC_OKTA_ORG || '';
+
+// Admin console lives on a "-admin" subdomain, e.g. https://foo.oktapreview.com -> https://foo-admin.oktapreview.com
+function adminOrgUrl(orgUrl: string): string {
+  return orgUrl.replace(/^(https?:\/\/)([^.]+)(\..+)$/, '$1$2-admin$3');
+}
+
+function systemLogUrl(orgUrl: string, agentOktaId?: string): string {
+  if (!orgUrl) return '#';
+  const now = new Date();
+  const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const params = new URLSearchParams({
+    fromTime: from.toISOString().replace(/\.\d+Z$/, 'Z'),
+    toTime: now.toISOString().replace(/\.\d+Z$/, 'Z'),
+    locale: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago',
+    limit: '20',
+    view: 'list',
+    topLeftLongitude: '-174.375',
+    topLeftLatitude: '77.23507365492469',
+    bottomRightLongitude: '177.18749999999997',
+    bottomRightLatitude: '-44.84029065139799',
+    mapZoom: '2',
+  });
+  if (agentOktaId) params.set('search', agentOktaId);
+  return `${adminOrgUrl(orgUrl)}/report/system_log_2?${params.toString()}`;
+}
 
 export default async function AgentDetailPage({ params }: { params: { id: string } }) {
   let agent: any;
@@ -36,126 +58,63 @@ export default async function AgentDetailPage({ params }: { params: { id: string
       : null;
 
   return (
-    <div className="max-w-2xl">
-      <Link href="/agents" className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white mb-6">
-        <ArrowLeft className="w-4 h-4" /> All Agents
-      </Link>
+    <div>
+      <Breadcrumbs items={[{ label: 'Directory' }, { label: 'AI Agents', href: '/agents' }, { label: agent.name }]} />
 
       {/* Header */}
-      <div className="flex items-start gap-4 mb-6">
-        <div className="w-12 h-12 rounded-xl bg-[#1662dd]/15 flex items-center justify-center">
-          <Bot className="w-6 h-6 text-[#60a5fa]" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold text-white">{agent.name}</h1>
-          {agent.description && <p className="text-slate-400 text-sm mt-0.5">{agent.description}</p>}
-          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <div className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1">AI Agents</div>
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-[#1662dd]/10 flex items-center justify-center">
+              <Bot className="w-5 h-5 text-[#1662dd]" />
+            </div>
+            <h1 className="text-2xl font-bold text-[var(--text-primary)]">{agent.name}</h1>
             <StatusBadge status={liveStatus} />
-            {agent.oktaAgentId && (
-              <span className="text-xs text-slate-600 font-mono bg-[#0d1525] px-2 py-0.5 rounded border border-[#1e293b]">
-                {agent.oktaAgentId}
-              </span>
-            )}
           </div>
+          {agent.description && <p className="text-[var(--text-secondary)] text-sm mt-1.5 ml-12">{agent.description}</p>}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <a
+            href={systemLogUrl(OKTA_ORG, agent.oktaAgentId)}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 px-4 py-2 border border-[var(--border-default)] text-sm font-semibold text-[var(--text-primary)] rounded-lg hover:bg-[var(--bg-surface-muted)] transition-colors"
+          >
+            View log <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+          <AgentActionsMenu agentId={agent.id} agentName={agent.name} currentStatus={liveStatus} />
         </div>
       </div>
 
       {/* Metadata row */}
-      <div className="grid grid-cols-2 gap-3 mb-5">
-        <div className="bg-[#111827] border border-[#1e293b] rounded-xl p-4 flex items-center gap-3">
-          <Calendar className="w-4 h-4 text-slate-500" />
-          <div>
-            <div className="text-xs text-slate-500">Created</div>
-            <div className="text-sm text-white">
-              {new Date(agent.createdAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })}
-            </div>
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-4">
+          <div className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Managed Status</div>
+          <div className="mt-1"><StatusBadge status={liveStatus} /></div>
+        </div>
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-4">
+          <div className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Creation Date</div>
+          <div className="text-sm text-[var(--text-primary)] mt-1">
+            {new Date(agent.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
           </div>
         </div>
-        <div className="bg-[#111827] border border-[#1e293b] rounded-xl p-4 flex items-center gap-3">
-          <Shield className="w-4 h-4 text-slate-500" />
-          <div>
-            <div className="text-xs text-slate-500">Okta Status</div>
-            <div className="text-sm text-white capitalize">{liveStatus || '—'}</div>
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-4">
+          <div className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Update Date</div>
+          <div className="text-sm text-[var(--text-primary)] mt-1">
+            {agent.okta?.lastUpdated
+              ? new Date(agent.okta.lastUpdated).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+              : '—'}
           </div>
         </div>
       </div>
 
-      {/* Lifecycle controls */}
-      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
-        <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-          Lifecycle
-        </h2>
-        <AgentLifecycle agentId={agent.id} currentStatus={liveStatus} />
-      </section>
-
-      {/* Owner */}
-      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#1662dd]" />
-            Owner
-          </h2>
-          <SyncOwnersButton scope={{ agentId: agent.id }} />
-        </div>
-        <UserPicker agentId={agent.id} currentOwner={currentOwner} />
-        <p className="text-[11px] text-slate-600 mt-3">
-          Assigning an owner registers it directly in Okta&apos;s IGA governance registry for this agent.
-        </p>
-      </section>
-
-      {/* User Access */}
-      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
-        <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
-          User Access
-        </h2>
-        <UserAccess agentId={agent.id} enabled={!!agent.userAccessEnabled} streamlined={streamlinedUserAccess} />
-      </section>
-
-      {/* Machine Access */}
-      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
-        <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <Cpu className="w-3.5 h-3.5 text-[#a78bfa]" />
-          Machine Access
-          <span className="text-xs text-slate-500 font-normal">— other AI agents authorized to call this agent</span>
-        </h2>
-        <MachineAccess agentId={agent.id} resourceUrl={agent.resourceUrl} streamlined={streamlinedMachineAccess} />
-      </section>
-
-      {/* Connections */}
-      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
-        <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
-          Resource Connections
-          <span className="text-xs text-slate-500 font-normal">— Auth Servers, Apps, MCP Servers, Secrets & more</span>
-        </h2>
-        <ResourcePicker agentId={agent.id} />
-      </section>
-
-      {/* Credentials — only shown after activation */}
-      <section className="bg-[#111827] border border-[#1e293b] rounded-xl p-5 mb-4">
-        <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <Key className="w-3.5 h-3.5 text-amber-400" />
-          Client Credentials
-        </h2>
-        {agent.credentials ? (
-          <AgentCredentials agentId={agent.id} credentials={agent.credentials} />
-        ) : (
-          <p className="text-sm text-slate-500 italic">
-            Credentials are available after the agent is activated.
-          </p>
-        )}
-      </section>
-
-      {/* Danger zone */}
-      <section className="bg-[#111827] border border-red-500/15 rounded-xl p-5">
-        <h2 className="text-sm font-semibold text-red-400 mb-2">Danger Zone</h2>
-        <p className="text-xs text-slate-500 mb-3">Permanently deletes this agent from Okta and removes all data.</p>
-        <ClientDeleteButton agentId={agent.id} agentName={agent.name} status={liveStatus} />
-      </section>
+      <AgentDetailTabs
+        agent={agent}
+        currentOwner={currentOwner}
+        streamlinedUserAccess={streamlinedUserAccess}
+        streamlinedMachineAccess={streamlinedMachineAccess}
+      />
     </div>
   );
 }
-
-import ClientDeleteButton from './DeleteAgent';

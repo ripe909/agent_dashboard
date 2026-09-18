@@ -44,18 +44,18 @@ function ClientIdField({ clientId }: { clientId: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div>
-      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Client ID</label>
-      <div className="flex items-center gap-2 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
-        <span className="flex-1 text-sm text-white font-mono truncate">{clientId}</span>
+      <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">Client ID</label>
+      <div className="flex items-center gap-2 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
+        <span className="flex-1 text-sm text-[var(--text-primary)] font-mono truncate">{clientId}</span>
         <button
           onClick={() => { navigator.clipboard.writeText(clientId); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-          className="text-slate-500 hover:text-[#60a5fa] flex-shrink-0"
+          className="text-[var(--text-secondary)] hover:text-[#1662dd] flex-shrink-0"
         >
-          {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+          {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
         </button>
       </div>
       {OKTA_ORG && (
-        <p className="text-xs text-slate-600 mt-1">
+        <p className="text-xs text-[var(--text-muted)] mt-1">
           Okta domain: <span className="font-mono">{OKTA_ORG}</span>
         </p>
       )}
@@ -64,7 +64,7 @@ function ClientIdField({ clientId }: { clientId: string }) {
 }
 
 function statusColour(status: string) {
-  return status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-500/15 text-slate-400';
+  return status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-[var(--bg-surface-muted)] text-[var(--text-secondary)]';
 }
 
 function formatDate(iso: string) {
@@ -74,15 +74,15 @@ function formatDate(iso: string) {
 function RevealOnce({ label, value, warning }: { label: string; value: string; warning: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="bg-amber-500/8 border border-amber-500/25 rounded-lg p-3 space-y-2">
-      <div className="text-xs font-semibold text-amber-300">{warning}</div>
-      <div className="flex items-center gap-2 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2.5">
-        <span className="flex-1 text-xs text-white font-mono truncate">{value}</span>
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+      <div className="text-xs font-semibold text-amber-700">{warning}</div>
+      <div className="flex items-center gap-2 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
+        <span className="flex-1 text-xs text-[var(--text-primary)] font-mono truncate">{value}</span>
         <button
           onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-          className="text-slate-500 hover:text-[#60a5fa] flex-shrink-0"
+          className="text-[var(--text-secondary)] hover:text-[#1662dd] flex-shrink-0"
         >
-          {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+          {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
         </button>
       </div>
     </div>
@@ -153,10 +153,10 @@ function NativeCredentials({ agentId, credentials: initial }: { agentId: string;
     <div className="space-y-4">
       <ClientIdField clientId={credentials.clientId} />
 
-      {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</div>}
+      {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>}
 
       <div>
-        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Client Registration</label>
+        <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">Client Registration</label>
         <div className="space-y-2">
           {NATIVE_OPTIONS.map(({ value, label, icon: Icon, description }) => {
             const isCurrent = credentials.authMethod === value;
@@ -164,25 +164,25 @@ function NativeCredentials({ agentId, credentials: initial }: { agentId: string;
               <div
                 key={value}
                 className={`p-3 rounded-lg border transition-all ${
-                  isCurrent ? 'border-[#1662dd]/40 bg-[#1662dd]/8' : 'border-[#1e293b] bg-[#0a0f1e]'
+                  isCurrent ? 'border-[#1662dd]/40 bg-[#1662dd]/8' : 'border-[var(--border-default)] bg-[var(--bg-surface-muted)]'
                 }`}
               >
                 <div className="flex items-start gap-3">
-                  <Icon className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+                  <Icon className="w-4 h-4 text-[var(--text-muted)] mt-0.5 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white">{label}</span>
+                      <span className="text-sm font-semibold text-[var(--text-primary)]">{label}</span>
                       {isCurrent && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-[#1662dd]/20 text-[#60a5fa]">CURRENT</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-[#1662dd]/15 text-[#1662dd]">CURRENT</span>
                       )}
                     </div>
-                    <div className="text-xs text-slate-500 mt-0.5">{description}</div>
+                    <div className="text-xs text-[var(--text-secondary)] mt-0.5">{description}</div>
                   </div>
                   {value === 'client_secret_basic' && (
                     <button
                       onClick={generateSecret}
                       disabled={loading !== null}
-                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40 flex-shrink-0"
+                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40 flex-shrink-0"
                     >
                       {loading === 'secret' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
                       Generate
@@ -192,7 +192,7 @@ function NativeCredentials({ agentId, credentials: initial }: { agentId: string;
                     <button
                       onClick={generateKey}
                       disabled={loading !== null}
-                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#60a5fa] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40 flex-shrink-0"
+                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40 flex-shrink-0"
                     >
                       {loading === 'jwk' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
                       Generate
@@ -222,9 +222,9 @@ function NativeCredentials({ agentId, credentials: initial }: { agentId: string;
                 {value === 'client_secret_basic' && credentials.secrets && credentials.secrets.length > 0 && (
                   <div className="mt-3 space-y-1.5">
                     {credentials.secrets.map((s) => (
-                      <div key={s.id} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2 text-xs">
-                        <span className="text-slate-500 font-mono">•••• {s.id.slice(-6)}</span>
-                        <span className="text-slate-600">created {formatDate(s.created)}</span>
+                      <div key={s.id} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-xs">
+                        <span className="text-[var(--text-secondary)] font-mono">•••• {s.id.slice(-6)}</span>
+                        <span className="text-[var(--text-muted)]">created {formatDate(s.created)}</span>
                         <span className={`ml-auto px-1.5 py-0.5 rounded font-medium ${statusColour(s.status)}`}>{s.status}</span>
                       </div>
                     ))}
@@ -233,9 +233,9 @@ function NativeCredentials({ agentId, credentials: initial }: { agentId: string;
                 {value === 'private_key_jwt' && credentials.jwks && credentials.jwks.length > 0 && (
                   <div className="mt-3 space-y-1.5">
                     {credentials.jwks.map((k) => (
-                      <div key={k.kid} className="flex items-center gap-3 bg-[#0a0f1e] border border-[#1e293b] rounded-lg px-3 py-2 text-xs">
-                        <span className="text-white font-mono truncate">{k.kid}</span>
-                        <span className="text-slate-600 flex-shrink-0">{k.alg} · {formatDate(k.created)}</span>
+                      <div key={k.kid} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-xs">
+                        <span className="text-[var(--text-primary)] font-mono truncate">{k.kid}</span>
+                        <span className="text-[var(--text-muted)] flex-shrink-0">{k.alg} · {formatDate(k.created)}</span>
                         <span className={`ml-auto px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${statusColour(k.status)}`}>{k.status}</span>
                       </div>
                     ))}
@@ -278,7 +278,7 @@ function AppCredentials({ agentId, credentials }: { agentId: string; credentials
 
       {/* Auth method picker */}
       <div>
-        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Authentication Method</label>
+        <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">Authentication Method</label>
         <div className="space-y-2">
           {AUTH_METHODS.map(({ value, label, icon: Icon, description }) => (
             <label
@@ -286,7 +286,7 @@ function AppCredentials({ agentId, credentials }: { agentId: string; credentials
               className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
                 method === value
                   ? 'border-[#1662dd]/40 bg-[#1662dd]/8'
-                  : 'border-[#1e293b] bg-[#0a0f1e] hover:border-slate-600'
+                  : 'border-[var(--border-default)] bg-[var(--bg-surface-muted)] hover:border-slate-400'
               }`}
             >
               <input
@@ -298,10 +298,10 @@ function AppCredentials({ agentId, credentials }: { agentId: string; credentials
                 className="mt-0.5 accent-[#1662dd] flex-shrink-0"
               />
               <div className="flex items-start gap-2.5 min-w-0">
-                <Icon className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+                <Icon className="w-4 h-4 text-[var(--text-muted)] mt-0.5 flex-shrink-0" />
                 <div>
-                  <div className="text-sm font-semibold text-white">{label}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">{description}</div>
+                  <div className="text-sm font-semibold text-[var(--text-primary)]">{label}</div>
+                  <div className="text-xs text-[var(--text-secondary)] mt-0.5">{description}</div>
                 </div>
               </div>
             </label>
@@ -318,13 +318,13 @@ function AppCredentials({ agentId, credentials }: { agentId: string; credentials
           {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
           {saving ? 'Saving…' : 'Save Credential Settings'}
         </button>
-        {saved && <span className="text-xs text-emerald-400 flex items-center gap-1"><Check className="w-3 h-3" />Saved</span>}
+        {saved && <span className="text-xs text-emerald-600 flex items-center gap-1"><Check className="w-3 h-3" />Saved</span>}
       </div>
 
-      {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</div>}
+      {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>}
 
       {method === 'private_key_jwt' && (
-        <div className="bg-amber-500/8 border border-amber-500/20 rounded-lg px-3 py-3 text-xs text-amber-300">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 text-xs text-amber-700">
           <strong>Private Key JWT:</strong> Upload a public key to Okta Admin Console → Applications → {credentials.clientId} → Client Credentials tab.
         </div>
       )}
