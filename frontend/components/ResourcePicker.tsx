@@ -23,6 +23,8 @@ interface AgentConnection {
   resource?: any; resourceIndicator?: string; scopeCondition?: string; scopes?: string[];
 }
 
+interface AgentTarget { id: string; oktaAgentId: string; name: string; machineAccessReady: boolean; }
+
 // ── Admin-console resource type definitions ───────────────────────────────────
 
 const RESOURCE_TYPES = [
@@ -81,8 +83,11 @@ type ResourceTypeId = typeof RESOURCE_TYPES[number]['id'];
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function connectionName(conn: PotentialConnection | AgentConnection): string {
-  if (conn.authorizationServer?.name) return conn.authorizationServer.name;
   const r = (conn as any).resource;
+  // For agent-to-agent connections, the target agent (resource.name) is the identity of the
+  // row — matching Okta's own console, which shows "AI agent / TEST10", not the authz server name.
+  if (conn.connectionType === 'IDENTITY_ASSERTION_A2A_SERVER' && r?.name) return r.name;
+  if (conn.authorizationServer?.name) return conn.authorizationServer.name;
   if (r?.appInstanceName) return r.appInstanceName;
   if (r?.name) return r.name;
   if (r?.clientAuthSettings?.name) return r.clientAuthSettings.name;
@@ -90,6 +95,9 @@ function connectionName(conn: PotentialConnection | AgentConnection): string {
 }
 
 function connectionSub(conn: PotentialConnection | AgentConnection): string {
+  if (conn.connectionType === 'IDENTITY_ASSERTION_A2A_SERVER' && conn.authorizationServer?.name) {
+    return `via ${conn.authorizationServer.name}`;
+  }
   if (conn.authorizationServer?.issuerUrl) return conn.authorizationServer.issuerUrl;
   const orn = conn.authorizationServer?.orn || (conn as any).resource?.orn || (conn as any).resource?.clientAuthSettings?.orn || '';
   return orn ? orn.substring(0, 60) + (orn.length > 60 ? '…' : '') : '';
@@ -102,6 +110,7 @@ interface Props { agentId: string; onStatusChange?: (hasConnections: boolean) =>
 export default function ResourcePicker({ agentId, onStatusChange }: Props) {
   const [connections, setConnections] = useState<AgentConnection[]>([]);
   const [allPotential, setAllPotential] = useState<PotentialConnection[]>([]);
+  const [agentTargets, setAgentTargets] = useState<AgentTarget[]>([]);
   const [loadingConnections, setLoadingConnections] = useState(true);
   const [loadingPotential, setLoadingPotential] = useState(true);
 
@@ -130,6 +139,12 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
       .then(d => setAllPotential(Array.isArray(d) ? d : []))
       .catch(() => setAllPotential([]))
       .finally(() => setLoadingPotential(false));
+    // Load every other agent as a "Connect to another AI agent" candidate — unlike
+    // potential-connections above, this includes agents with no Machine Access set up yet.
+    fetch(`${BACKEND}/api/agents/${agentId}/agent-targets`)
+      .then(r => r.json())
+      .then(d => setAgentTargets(Array.isArray(d) ? d : []))
+      .catch(() => setAgentTargets([]));
   }, [agentId, loadConnections]);
 
   useEffect(() => {
@@ -143,6 +158,16 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
     (c as any).resource?.clientAuthSettings?.orn || ''
   ).filter(Boolean));
 
+  // Agent-to-agent connections are keyed by the target's Okta agent id (parsed off the tail of
+  // its a2a resource-server ORN) rather than the ORN itself — a not-yet-provisioned target has
+  // no resource-server ORN at all yet, so ORN-based matching alone can't exclude it once connected.
+  const connectedAgentOktaIds = new Set(
+    connections
+      .filter(c => c.connectionType === 'IDENTITY_ASSERTION_A2A_SERVER')
+      .map(c => (c as any).resource?.orn?.split(':').pop())
+      .filter(Boolean)
+  );
+
   // ── Add connection ─────────────────────────────────────────────────────────
   async function addConnection(conn: PotentialConnection) {
     const key = JSON.stringify(conn);
@@ -151,6 +176,21 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
       const res = await fetch(`${BACKEND}/api/agents/${agentId}/connections`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(conn),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to create connection'); setAdding(null); return; }
+      await loadConnections();
+      setStep('closed');
+    } catch (e: any) { setError(e.message); }
+    setAdding(null);
+  }
+
+  async function addAgentTarget(target: AgentTarget) {
+    setAdding(target.id); setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/connections`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionType: 'IDENTITY_ASSERTION_A2A_SERVER', targetAgentId: target.id }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Failed to create connection'); setAdding(null); return; }
@@ -176,13 +216,20 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
     ? RESOURCE_TYPES.find(t => t.id === step)
     : null;
 
-  const filteredConnections = selectedType
+  const filteredConnections = selectedType && selectedType.id !== 'ai_agent'
     ? allPotential.filter(p =>
         (selectedType.connectionTypes as readonly string[]).includes(p.connectionType) &&
         !connectedOrns.has(
           p.authorizationServer?.orn || p.resource?.orn || p.resource?.clientAuthSettings?.orn || ''
         )
       )
+    : [];
+
+  // "Connect to another AI agent" sources from every dashboard agent (agentTargets), not just
+  // Okta's potential-connections — a target with no Machine Access configured yet still shows up
+  // here, flagged via machineAccessReady, and gets auto-provisioned on select (see addAgentTarget).
+  const filteredAgentTargets = selectedType?.id === 'ai_agent'
+    ? agentTargets.filter(t => !connectedAgentOktaIds.has(t.oktaAgentId))
     : [];
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -225,6 +272,7 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
                     <div className="text-sm font-medium text-[var(--text-primary)] truncate">{connectionName(c)}</div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--text-secondary)] truncate">{typeDef?.label || c.connectionType}</span>
+                      {connectionSub(c) && <span className="text-xs text-[var(--text-muted)] truncate">· {connectionSub(c)}</span>}
                       <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
                         c.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-[var(--bg-surface-muted)] text-[var(--text-secondary)]'
                       }`}>{c.status}</span>
@@ -263,9 +311,11 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
           <div className="space-y-2">
             {RESOURCE_TYPES.map((type) => {
               const Icon = type.icon;
-              const available = allPotential.filter(p =>
-                (type.connectionTypes as readonly string[]).includes(p.connectionType)
-              ).length;
+              const available = type.id === 'ai_agent'
+                ? agentTargets.length
+                : allPotential.filter(p =>
+                    (type.connectionTypes as readonly string[]).includes(p.connectionType)
+                  ).length;
               return (
                 <button
                   key={type.id}
@@ -313,7 +363,43 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
           </div>
           <p className="text-xs text-[var(--text-secondary)] mb-3">Select a resource</p>
 
-          {filteredConnections.length === 0 ? (
+          {selectedType.id === 'ai_agent' ? (
+            filteredAgentTargets.length === 0 ? (
+              <div className="text-xs text-[var(--text-secondary)] text-center py-6 border border-dashed border-[var(--border-default)] rounded-lg">
+                No other AI agent resources available or all are already connected
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {filteredAgentTargets.map((target) => {
+                  const isAdding = adding === target.id;
+                  const Icon = selectedType.icon;
+                  return (
+                    <button
+                      key={target.id}
+                      onClick={() => addAgentTarget(target)}
+                      disabled={!!adding}
+                      className="w-full flex items-center gap-3 px-3 py-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors disabled:opacity-50"
+                    >
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${selectedType.colour}1a` }}>
+                        <Icon className="w-3.5 h-3.5" style={{ color: selectedType.colour }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-[var(--text-primary)] truncate">{target.name}</div>
+                        {!target.machineAccessReady && (
+                          <div className="text-xs text-amber-600">Needs Machine Access setup — will configure automatically</div>
+                        )}
+                      </div>
+                      {isAdding ? (
+                        <RefreshCw className="w-4 h-4 text-[#1662dd] animate-spin flex-shrink-0" />
+                      ) : (
+                        <Plus className="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )
+          ) : filteredConnections.length === 0 ? (
             <div className="text-xs text-[var(--text-secondary)] text-center py-6 border border-dashed border-[var(--border-default)] rounded-lg">
               {loadingPotential ? (
                 <><RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Loading…</>

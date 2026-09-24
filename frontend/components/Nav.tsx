@@ -3,7 +3,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
-import { Bot, Users, Puzzle, LayoutDashboard, LogOut, Settings } from 'lucide-react';
+import { Bot, Users, Puzzle, LayoutDashboard, LogOut, Settings, PlayCircle } from 'lucide-react';
 import clsx from 'clsx';
 import SettingsModal from './SettingsModal';
 
@@ -12,6 +12,7 @@ const links = [
   { href: '/agents', label: 'AI Agents', icon: Bot },
   { href: '/users', label: 'Users', icon: Users },
   { href: '/resources', label: 'Resources', icon: Puzzle },
+  { href: '/exercise', label: 'Exercise', icon: PlayCircle },
 ];
 
 interface Props {

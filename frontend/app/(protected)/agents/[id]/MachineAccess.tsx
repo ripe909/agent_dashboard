@@ -2,12 +2,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, X, Bot, Blocks, RefreshCw, Cpu, ChevronRight, ArrowLeft } from 'lucide-react';
 import AgentPicker from '@/components/AgentPicker';
+import AppPicker from '@/components/AppPicker';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
-interface Caller { id: string; callerAgentId: string; callerName: string; }
+interface Caller { id: string; callerAgentId: string; callerName: string; callerType?: 'agent' | 'app'; }
 interface AuthServer { id: string; name: string; orn: string; }
 interface AgentOption { id: string; name: string; }
+interface AppOption { id: string; label: string; }
 
 interface Props {
   agentId: string;
@@ -16,13 +18,14 @@ interface Props {
   onStatusChange?: (hasAccess: boolean) => void;
 }
 
-type WizardStep = 'closed' | 'type' | 'agent' | 'details';
+type WizardStep = 'closed' | 'type' | 'agent' | 'app' | 'details';
 
 // ── Streamlined flow: pick a caller, submit — audience + shared authz server handled server-side ──
 function StreamlinedMachineAccess({ agentId, onStatusChange }: { agentId: string; onStatusChange?: (hasAccess: boolean) => void }) {
   const [callers, setCallers] = useState<Caller[]>([]);
   const [loadingCallers, setLoadingCallers] = useState(true);
   const [picking, setPicking] = useState(false);
+  const [callerType, setCallerType] = useState<'agent' | 'app'>('agent');
   const [assigning, setAssigning] = useState(false);
   const [error, setError] = useState('');
 
@@ -42,12 +45,27 @@ function StreamlinedMachineAccess({ agentId, onStatusChange }: { agentId: string
     if (!loadingCallers) onStatusChange?.(callers.length > 0);
   }, [loadingCallers, callers.length]);
 
-  async function assign(agent: AgentOption) {
+  async function assignAgent(agent: AgentOption) {
     setAssigning(true); setError('');
     try {
       const res = await fetch(`${BACKEND}/api/agents/${agentId}/machine-access/assign`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ callerAgentId: agent.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to add caller'); setAssigning(false); return; }
+      setPicking(false);
+      await loadCallers();
+    } catch (e: any) { setError(e.message); }
+    setAssigning(false);
+  }
+
+  async function assignApp(app: AppOption) {
+    setAssigning(true); setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/machine-access/assign-app`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: app.id }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Failed to add caller'); setAssigning(false); return; }
@@ -84,12 +102,12 @@ function StreamlinedMachineAccess({ agentId, onStatusChange }: { agentId: string
           <div className="space-y-2">
             {callers.map((c) => (
               <div key={c.id} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
-                <div className="w-8 h-8 rounded-lg bg-[#a78bfa]/15 flex items-center justify-center flex-shrink-0">
-                  <Bot className="w-4 h-4 text-[#a78bfa]" />
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${c.callerType === 'app' ? 'bg-[#fb923c]/15' : 'bg-[#a78bfa]/15'}`}>
+                  {c.callerType === 'app' ? <Blocks className="w-4 h-4 text-[#fb923c]" /> : <Bot className="w-4 h-4 text-[#a78bfa]" />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-[var(--text-primary)] truncate">{c.callerName}</div>
-                  <div className="text-xs text-[var(--text-secondary)]">AI agent</div>
+                  <div className="text-xs text-[var(--text-secondary)]">{c.callerType === 'app' ? 'Service app' : 'AI agent'}</div>
                 </div>
               </div>
             ))}
@@ -104,16 +122,36 @@ function StreamlinedMachineAccess({ agentId, onStatusChange }: { agentId: string
       {picking && (
         <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Select the calling agent</h3>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Add a caller</h3>
             <button onClick={() => setPicking(false)} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="flex items-center gap-1 mb-4 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg p-1">
+            <button
+              onClick={() => setCallerType('agent')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                callerType === 'agent' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-secondary)]'
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5" /> AI agent
+            </button>
+            <button
+              onClick={() => setCallerType('app')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                callerType === 'app' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-secondary)]'
+              }`}
+            >
+              <Blocks className="w-3.5 h-3.5" /> Service app
+            </button>
           </div>
           {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 mb-3">{error}</div>}
           {assigning ? (
             <div className="text-xs text-[var(--text-secondary)] text-center py-6">
               <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Authorizing…
             </div>
+          ) : callerType === 'agent' ? (
+            <AgentPicker excludeAgentId={agentId} onSelect={assignAgent} />
           ) : (
-            <AgentPicker excludeAgentId={agentId} onSelect={assign} />
+            <AppPicker onSelect={assignApp} />
           )}
         </div>
       )}
@@ -138,6 +176,7 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl, onStatu
   const [audienceInput, setAudienceInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [assigningApp, setAssigningApp] = useState(false);
 
   const loadCallers = useCallback(async () => {
     setLoadingCallers(true);
@@ -188,6 +227,21 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl, onStatu
     setSaving(false);
   }
 
+  async function submitApp(app: AppOption) {
+    setAssigningApp(true); setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/machine-access/assign-app`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: app.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to add caller'); setAssigningApp(false); return; }
+      setStep('closed');
+      await loadCallers();
+    } catch (e: any) { setError(e.message); }
+    setAssigningApp(false);
+  }
+
   const needsAudience = !resourceUrl;
   const canSubmit = !!selectedAgent && !!selectedAuthServerId && (!needsAudience || audienceInput.trim().length > 0);
 
@@ -218,12 +272,12 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl, onStatu
           <div className="space-y-2">
             {callers.map((c) => (
               <div key={c.id} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
-                <div className="w-8 h-8 rounded-lg bg-[#a78bfa]/15 flex items-center justify-center flex-shrink-0">
-                  <Bot className="w-4 h-4 text-[#a78bfa]" />
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${c.callerType === 'app' ? 'bg-[#fb923c]/15' : 'bg-[#a78bfa]/15'}`}>
+                  {c.callerType === 'app' ? <Blocks className="w-4 h-4 text-[#fb923c]" /> : <Bot className="w-4 h-4 text-[#a78bfa]" />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-[var(--text-primary)] truncate">{c.callerName}</div>
-                  <div className="text-xs text-[var(--text-secondary)]">AI agent</div>
+                  <div className="text-xs text-[var(--text-secondary)]">{c.callerType === 'app' ? 'Service app' : 'AI agent'}</div>
                 </div>
               </div>
             ))}
@@ -253,13 +307,16 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl, onStatu
               <div className="text-sm font-semibold text-[var(--text-primary)]">AI agent</div>
               <div className="text-xs text-[var(--text-secondary)]">Another AI agent registered in Okta.</div>
             </button>
-            <div className="flex flex-col items-start gap-2 px-4 py-3.5 bg-[var(--bg-surface-muted)]/50 border border-[var(--border-default)] rounded-lg text-left opacity-50 cursor-not-allowed">
-              <div className="w-8 h-8 rounded-lg bg-slate-500/15 flex items-center justify-center">
-                <Blocks className="w-4 h-4 text-[var(--text-secondary)]" />
+            <button
+              onClick={() => { setError(''); setStep('app'); }}
+              className="flex flex-col items-start gap-2 px-4 py-3.5 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors"
+            >
+              <div className="w-8 h-8 rounded-lg bg-[#fb923c]/15 flex items-center justify-center">
+                <Blocks className="w-4 h-4 text-[#fb923c]" />
               </div>
-              <div className="text-sm font-semibold text-[var(--text-muted)]">Application or service</div>
-              <div className="text-xs text-[var(--text-muted)]">Coming soon</div>
-            </div>
+              <div className="text-sm font-semibold text-[var(--text-primary)]">Application or service</div>
+              <div className="text-xs text-[var(--text-secondary)]">An Okta OAuth app, e.g. a service client.</div>
+            </button>
           </div>
         </div>
       )}
@@ -279,6 +336,29 @@ function LegacyMachineAccess({ agentId, resourceUrl: initialResourceUrl, onStatu
             excludeAgentId={agentId}
             onSelect={(a) => { setSelectedAgent(a); setStep('details'); }}
           />
+        </div>
+      )}
+
+      {/* Step 2 (app path): pick the calling app — authorized directly, no manual authz-server step
+          since assign-app always uses the shared authorization server configured in Settings. */}
+      {step === 'app' && (
+        <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <button onClick={() => setStep('type')} className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+              <ArrowLeft className="w-3.5 h-3.5" /> Back
+            </button>
+            <span className="text-[var(--text-muted)]">·</span>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Select the calling app</h3>
+            <button onClick={() => setStep('closed')} className="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X className="w-4 h-4" /></button>
+          </div>
+          {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 mb-3">{error}</div>}
+          {assigningApp ? (
+            <div className="text-xs text-[var(--text-secondary)] text-center py-6">
+              <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />Authorizing…
+            </div>
+          ) : (
+            <AppPicker onSelect={submitApp} />
+          )}
         </div>
       )}
 

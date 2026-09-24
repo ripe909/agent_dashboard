@@ -11,6 +11,11 @@ export const agents = pgTable('agents', {
   status: text('status').default('pending').notNull(),
   createdBy: text('created_by'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  // Plaintext credentials captured for the Exercise Agent feature — Okta only shows these once,
+  // so they must be persisted here if we want to make a live token request as this agent later.
+  testClientSecret: text('test_client_secret'),
+  testPrivateKeyPem: text('test_private_key_pem'),
+  testPrivateKeyKid: text('test_private_key_kid'),
 });
 
 export const resources = pgTable('resources', {

@@ -9,6 +9,8 @@ interface Settings {
   streamlinedUserAccess: boolean;
   streamlinedMachineAccess: boolean;
   sharedAuthorizationServerId: string | null;
+  serviceClientId: string | null;
+  serviceClientSecret: string | null;
 }
 interface AuthServer { id: string; name: string; }
 
@@ -17,11 +19,14 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const [authServers, setAuthServers] = useState<AuthServer[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [serviceClientId, setServiceClientId] = useState('');
+  const [serviceClientSecret, setServiceClientSecret] = useState('');
+  const [savedServiceClient, setSavedServiceClient] = useState(false);
 
   useEffect(() => {
     fetch(`${BACKEND}/api/settings`)
       .then((r) => r.json())
-      .then(setSettings)
+      .then((d) => { setSettings(d); setServiceClientId(d.serviceClientId || ''); })
       .catch((e) => setError(e.message || 'Failed to load settings'));
     fetch(`${BACKEND}/api/settings/authorization-servers`)
       .then((r) => r.json())
@@ -44,6 +49,24 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
       if (!res.ok) { setError(data.error || 'Failed to save'); setSettings(settings); return; }
       setSettings(data);
     } catch (e: any) { setError(e.message); setSettings(settings); }
+    setSaving(false);
+  }
+
+  async function saveServiceClient() {
+    setSaving(true); setError(''); setSavedServiceClient(false);
+    try {
+      const patch: Partial<Settings> = { serviceClientId: serviceClientId.trim() || null };
+      if (serviceClientSecret.trim()) patch.serviceClientSecret = serviceClientSecret.trim();
+      const res = await fetch(`${BACKEND}/api/settings`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to save'); setSaving(false); return; }
+      setSettings(data);
+      setServiceClientSecret('');
+      setSavedServiceClient(true);
+      setTimeout(() => setSavedServiceClient(false), 3000);
+    } catch (e: any) { setError(e.message); }
     setSaving(false);
   }
 
@@ -122,6 +145,37 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
+            </div>
+
+            <div className="p-3 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-muted)]">
+              <div className="text-sm font-semibold text-[var(--text-primary)] mb-1">Service Client</div>
+              <div className="text-xs text-[var(--text-secondary)] mb-2">
+                Originates the delegation chain used by Exercise Agent&apos;s Machine Access tests.
+              </div>
+              <input
+                value={serviceClientId}
+                onChange={(e) => setServiceClientId(e.target.value)}
+                placeholder="Client ID"
+                className="w-full mb-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[#1662dd]/40"
+              />
+              <input
+                value={serviceClientSecret}
+                onChange={(e) => setServiceClientSecret(e.target.value)}
+                type="password"
+                placeholder={settings.serviceClientSecret ? 'Client secret (already saved — leave blank to keep)' : 'Client secret'}
+                className="w-full mb-2 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[#1662dd]/40"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={saveServiceClient}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40"
+                >
+                  {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                  Save
+                </button>
+                {savedServiceClient && <span className="text-xs text-emerald-600">Saved</span>}
+              </div>
             </div>
           </div>
         )}

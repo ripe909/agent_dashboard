@@ -356,14 +356,66 @@ router.get('/:id/delegations', async (req: Request, res: Response) => {
     const links = await okta.listDelegationLinksTo(targetOrn);
     const withCallers = await Promise.all(links.map(async (link) => {
       const callerId = link.callerOrn.split(':').pop();
+      const isApp = link.callerOrn.includes(':apps:');
       let callerName = callerId;
       try {
-        const caller = await okta.getAIAgent(callerId!);
-        callerName = caller.profile.name;
+        if (isApp) {
+          const app = await okta.getApp(callerId!);
+          callerName = app.label;
+        } else {
+          const caller = await okta.getAIAgent(callerId!);
+          callerName = caller.profile.name;
+        }
       } catch {}
-      return { id: link.id, callerAgentId: callerId, callerName };
+      return { id: link.id, callerAgentId: callerId, callerName, callerType: isApp ? 'app' : 'agent' };
     }));
     res.json(withCallers);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/agents/:id/agent-targets — every other agent in the dashboard as a candidate for
+// "Connect to another AI agent," each flagged with whether it already has Machine Access
+// configured (a resourceUrl set in Okta). Unlike Okta's own potential-connections API, this
+// list includes agents that aren't yet registered as an A2A resource server — ResourcePicker
+// uses machineAccessReady to warn the user, and POST /connections auto-provisions on select.
+router.get('/:id/agent-targets', async (req: Request, res: Response) => {
+  try {
+    const all = await store.listAgents();
+    const targets = await Promise.all(
+      all.filter(a => a.id !== req.params.id && a.oktaAgentId).map(async (a) => {
+        const resourceUrl = await okta.getAgentResourceUrl(a.oktaAgentId!).catch(() => undefined);
+        return { id: a.id, oktaAgentId: a.oktaAgentId, name: a.name, machineAccessReady: !!resourceUrl };
+      })
+    );
+    res.json(targets);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/agents/:id/delegations-from — list agents this agent is currently authorized to call
+// (the reverse of /delegations — used by the Exercise page's caller-first flow).
+router.get('/:id/delegations-from', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.json([]);
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    const callerOrn = okta.agentOrnFromLinks(oktaAgent._links);
+    if (!callerOrn) return res.json([]);
+
+    const links = await okta.listDelegationLinksFrom(callerOrn);
+    const withTargets = await Promise.all(links.map(async (link) => {
+      const targetId = link.targetOrn.split(':').pop();
+      let targetName = targetId;
+      try {
+        const target = await okta.getAIAgent(targetId!);
+        targetName = target.profile.name;
+      } catch {}
+      return { id: link.id, targetAgentId: targetId, targetName };
+    }));
+    res.json(withTargets);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -401,7 +453,17 @@ router.post('/:id/delegations', async (req: Request, res: Response) => {
 
     await okta.connectAuthorizationServer(target.oktaAgentId, authServerOrn);
     await okta.createDelegationLink(callerOrn, targetOrn, authServerOrn);
-    res.status(201).json({ message: 'Caller authorized' });
+
+    // Also create the reciprocal resource connection — matching the real Okta Admin Console,
+    // which keeps a delegation link and its resource connection in sync in both directions.
+    let warning: string | undefined;
+    try {
+      await okta.ensureAgentConnection(caller.oktaAgentId, targetOrn, authServerOrn);
+    } catch (e: any) {
+      warning = `Caller authorized, but failed to also create the resource connection: ${e.message}`;
+    }
+
+    res.status(201).json(warning ? { message: 'Caller authorized', warning } : { message: 'Caller authorized' });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -429,7 +491,68 @@ router.post('/:id/machine-access/assign', async (req: Request, res: Response) =>
 
     const { targetOrn, authServerOrn } = await okta.ensureMachineAccess(target.oktaAgentId, settings.sharedAuthorizationServerId);
     await okta.createDelegationLink(callerOrn, targetOrn, authServerOrn);
-    res.status(201).json({ message: 'Caller authorized' });
+
+    // Also create the reciprocal resource connection — matching the real Okta Admin Console,
+    // which keeps a delegation link and its resource connection in sync in both directions.
+    let warning: string | undefined;
+    try {
+      await okta.ensureAgentConnection(caller.oktaAgentId, targetOrn, authServerOrn);
+    } catch (e: any) {
+      warning = `Caller authorized, but failed to also create the resource connection: ${e.message}`;
+    }
+
+    res.status(201).json(warning ? { message: 'Caller authorized', warning } : { message: 'Caller authorized' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/machine-access/assign-service-client — authorizes the configured service
+// client (Settings > Service Client) as a caller of this agent, the same delegation-links
+// mechanism as agent-to-agent Machine Access but with the app's own ORN as from.clientOrn.
+// Needed so the service client's step-1 access token satisfies a real delegation policy when
+// the Exercise feature's caller agent redeems it via token-exchange/jwt-bearer in step 2/3.
+router.post('/:id/machine-access/assign-service-client', async (req: Request, res: Response) => {
+  try {
+    const settings = await store.getSettings();
+    if (!settings.serviceClientId) return res.status(400).json({ error: 'Configure a service client in Settings first' });
+    if (!settings.sharedAuthorizationServerId) {
+      return res.status(400).json({ error: 'Configure a shared authorization server in Settings first' });
+    }
+
+    const target = await store.findAgentById(req.params.id);
+    if (!target?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+
+    const { targetOrn, authServerOrn } = await okta.ensureMachineAccess(target.oktaAgentId, settings.sharedAuthorizationServerId);
+    const orgId = okta.orgIdFromAgentOrn(targetOrn);
+    const appOrn = okta.buildAppOrn(settings.serviceClientId, orgId);
+    await okta.createDelegationLink(appOrn, targetOrn, authServerOrn);
+    res.status(201).json({ message: 'Service client authorized' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/machine-access/assign-app — streamlined flow: authorize an arbitrary
+// Okta OAuth app (typically a Service app) as a caller of this agent, generalizing
+// assign-service-client to any app the user picks rather than the one global Settings client.
+router.post('/:id/machine-access/assign-app', async (req: Request, res: Response) => {
+  const { appId } = req.body;
+  if (!appId) return res.status(400).json({ error: 'appId is required' });
+  try {
+    const settings = await store.getSettings();
+    if (!settings.sharedAuthorizationServerId) {
+      return res.status(400).json({ error: 'Configure a shared authorization server in Settings first' });
+    }
+
+    const target = await store.findAgentById(req.params.id);
+    if (!target?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+
+    const { targetOrn, authServerOrn } = await okta.ensureMachineAccess(target.oktaAgentId, settings.sharedAuthorizationServerId);
+    const orgId = okta.orgIdFromAgentOrn(targetOrn);
+    const appOrn = okta.buildAppOrn(appId, orgId);
+    await okta.createDelegationLink(appOrn, targetOrn, authServerOrn);
+    res.status(201).json({ message: 'App authorized' });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

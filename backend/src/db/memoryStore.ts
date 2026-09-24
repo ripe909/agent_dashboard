@@ -33,6 +33,9 @@ export class MemoryStore implements Store {
       status: data.status,
       createdBy: data.createdBy ?? null,
       createdAt: new Date(),
+      testClientSecret: null,
+      testPrivateKeyPem: null,
+      testPrivateKeyKid: null,
     };
     this.agentsById.set(agent.id, agent);
     return agent;

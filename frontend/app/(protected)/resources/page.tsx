@@ -60,8 +60,11 @@ const CATEGORIES = [
 ] as const;
 
 function resourceName(conn: PotentialConnection): string {
-  if (conn.authorizationServer?.name) return conn.authorizationServer.name;
   const r = conn.resource;
+  // For agent-to-agent connections, the target agent (resource.name) is the identity of the
+  // row — matching Okta's own console, which shows "AI agent / TEST10", not the authz server name.
+  if (conn.connectionType === 'IDENTITY_ASSERTION_A2A_SERVER' && r?.name) return r.name;
+  if (conn.authorizationServer?.name) return conn.authorizationServer.name;
   if (r?.appInstanceName) return r.appInstanceName;
   if (r?.name) return r.name;
   if (r?.clientAuthSettings?.name) return r.clientAuthSettings.name;
@@ -75,6 +78,9 @@ function resourceOrn(conn: PotentialConnection): string {
 }
 
 function resourceSub(conn: PotentialConnection): string {
+  if (conn.connectionType === 'IDENTITY_ASSERTION_A2A_SERVER' && conn.authorizationServer?.name) {
+    return `via ${conn.authorizationServer.name}`;
+  }
   if (conn.authorizationServer?.issuerUrl) return conn.authorizationServer.issuerUrl;
   const orn = resourceOrn(conn);
   return orn ? orn.substring(0, 70) + (orn.length > 70 ? '…' : '') : '';

@@ -2,19 +2,23 @@ import { Agent, Resource } from './schema';
 import { PostgresStore } from './postgresStore';
 import { MemoryStore } from './memoryStore';
 
-export type AgentPatch = Partial<Pick<Agent, 'name' | 'description' | 'status' | 'ownerId' | 'ownerName' | 'ownerEmail'>>;
+export type AgentPatch = Partial<Pick<Agent, 'name' | 'description' | 'status' | 'ownerId' | 'ownerName' | 'ownerEmail' | 'testClientSecret' | 'testPrivateKeyPem' | 'testPrivateKeyKid'>>;
 export type NewAgent = Pick<Agent, 'name' | 'oktaAgentId' | 'status'> & Partial<Pick<Agent, 'description' | 'createdBy'>>;
 
 export interface AppSettings {
   streamlinedUserAccess: boolean;
   streamlinedMachineAccess: boolean;
   sharedAuthorizationServerId: string | null;
+  serviceClientId: string | null;
+  serviceClientSecret: string | null;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   streamlinedUserAccess: true,
   streamlinedMachineAccess: true,
   sharedAuthorizationServerId: null,
+  serviceClientId: null,
+  serviceClientSecret: null,
 };
 
 export interface Store {
