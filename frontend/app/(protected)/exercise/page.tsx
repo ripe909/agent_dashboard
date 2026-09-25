@@ -1,9 +1,6 @@
-import { Suspense } from 'react';
 import { apiFetch } from '@/lib/api';
 import Breadcrumbs from '@/components/Breadcrumbs';
-import { Cpu, UserCheck } from 'lucide-react';
-import MachineAccessExercise from './MachineAccessExercise';
-import UserAccessExercise from './UserAccessExercise';
+import ExercisePageTabs from './ExercisePageTabs';
 
 interface AgentOption { id: string; name: string; oktaAgentId?: string; }
 
@@ -21,23 +18,7 @@ export default async function ExercisePage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <section className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
-            <Cpu className="w-3.5 h-3.5 text-[#a78bfa]" /> Machine Access
-          </h2>
-          <MachineAccessExercise agents={agents} />
-        </section>
-
-        <section className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
-            <UserCheck className="w-3.5 h-3.5 text-emerald-600" /> User Access
-          </h2>
-          <Suspense fallback={null}>
-            <UserAccessExercise agents={agents} />
-          </Suspense>
-        </section>
-      </div>
+      <ExercisePageTabs agents={agents} />
     </div>
   );
 }

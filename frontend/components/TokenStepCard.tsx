@@ -4,6 +4,7 @@ export interface TokenResult {
   accessToken?: string;
   decoded?: { header: any; payload: any };
   raw: any;
+  request?: { tokenEndpoint: string; body: any };
 }
 
 function JsonBlock({ label, value }: { label: string; value: any }) {
@@ -27,6 +28,7 @@ export default function TokenStepCard({ title, step }: { title: string; step: To
           {step.status}
         </span>
       </div>
+      {step.request && <JsonBlock label={`Request — ${step.request.tokenEndpoint}`} value={step.request.body} />}
       {step.decoded ? (
         <>
           <JsonBlock label="Header" value={step.decoded.header} />

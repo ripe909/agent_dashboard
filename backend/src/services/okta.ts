@@ -11,11 +11,12 @@ const ORG = () => process.env.OKTA_ORG_URL!;
 // The governance (IGA resource-owners) API lives on the admin hostname, not the org hostname.
 const GOV_ORG = () => toAdminUrl(ORG());
 const AUTH_MODE = () => process.env.OKTA_AUTH_MODE || 'api_token';
-// okta.governance.resourceOwner.{read,manage}, okta.authorizationServers.read, and
-// okta.clients.read (needed to read a native agent's real token_endpoint_auth_method from
-// /oauth2/v1/clients/{id} — see getNativeAgentCredentials) must also be granted on the M2M
-// app's API Scopes tab.
-const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage okta.authorizationServers.read okta.clients.read';
+// okta.governance.resourceOwner.{read,manage}, okta.authorizationServers.read, okta.clients.read
+// (needed to read a native agent's real token_endpoint_auth_method from /oauth2/v1/clients/{id} —
+// see getNativeAgentCredentials), and okta.clients.manage (needed to PUT a corrected
+// token_endpoint_auth_method — see createAgentSecret) must also be granted on the M2M app's API
+// Scopes tab.
+const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage okta.authorizationServers.read okta.clients.read okta.clients.manage';
 
 function toAdminUrl(orgUrl: string): string {
   return orgUrl
@@ -526,6 +527,7 @@ export interface ExerciseTokenResult {
   accessToken?: string;
   decoded?: { header: any; payload: any };
   raw: any;
+  request?: { tokenEndpoint: string; body: any };
 }
 
 // Generic client assertion signer — parallel to buildClientAssertion, but parameterized by an
@@ -580,9 +582,10 @@ async function postToken(
     requestBody: maskSecrets(body), responseBody: maskSecrets(responseBody), status: res.status, durationMs: Date.now() - startMs,
   });
 
-  if (!res.ok) return { ok: false, status: res.status, raw: responseBody };
+  const request = { tokenEndpoint, body: maskSecrets(body) };
+  if (!res.ok) return { ok: false, status: res.status, raw: responseBody, request };
   const accessToken = responseBody.access_token;
-  return { ok: true, status: res.status, accessToken, decoded: accessToken ? decodeJwt(accessToken) : undefined, raw: maskSecrets(responseBody) };
+  return { ok: true, status: res.status, accessToken, decoded: accessToken ? decodeJwt(accessToken) : undefined, raw: maskSecrets(responseBody), request };
 }
 
 // Step 1: the configured service client originates the chain with a plain client_credentials grant.
@@ -707,7 +710,30 @@ export async function listAgentSecrets(agentId: string): Promise<AgentSecret[]> 
   return (data || []).map((s) => ({ id: s.id, status: s.status, created: s.created }));
 }
 
+// Adding a secret credential record to a native agent does NOT change what its real OAuth client
+// is configured to authenticate with — confirmed live: a freshly-created agent defaults to
+// private_key_jwt, and POSTing a secret just adds a record Okta will never actually accept,
+// leaving the client stuck on private_key_jwt regardless (the root cause of ET4's and ET10's
+// "generated a secret but it doesn't authenticate" bug). So this checks the client's real
+// token_endpoint_auth_method first and switches it to client_secret_basic via PUT if needed —
+// which, confirmed live, returns a fresh client_secret directly in that same response, the same
+// way rotateAppSecret's PUT already does for app-backed agents.
 export async function createAgentSecret(agentId: string): Promise<{ id: string; clientSecret: string; status: string }> {
+  const clientRes = await sswsFetch(`/oauth2/v1/clients/${agentId}`);
+  if (!clientRes.ok) throw new Error(`getClient ${clientRes.status}: ${await clientRes.text()}`);
+  const client = await clientRes.json() as any;
+
+  if (client.token_endpoint_auth_method !== 'client_secret_basic') {
+    const putRes = await sswsFetch(`/oauth2/v1/clients/${agentId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...client, token_endpoint_auth_method: 'client_secret_basic' }),
+    });
+    if (!putRes.ok) throw new Error(`switchClientAuthMethod ${putRes.status}: ${await putRes.text()}`);
+    const updated = await putRes.json() as any;
+    if (!updated.client_secret) throw new Error('Switching auth method did not return a client_secret');
+    return { id: agentId, clientSecret: updated.client_secret, status: 'ACTIVE' };
+  }
+
   const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets`, {
     method: 'POST', body: JSON.stringify({}),
   });

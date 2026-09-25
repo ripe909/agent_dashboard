@@ -398,4 +398,148 @@ router.post('/agents/exercise/continue-to-authserver', async (req: Request, res:
   }
 });
 
+// ── Graph UI: split hop, one Okta call per click ─────────────────────────────
+// The graph's Configuration designer tab (ExerciseGraph.tsx) triggers the exchange (id-jag) on the
+// CALLER node's click and the redemption (final token) on the TARGET node's click, rather than
+// bundling both into one call on the destination — mirrors the real two-request mechanics and lets
+// each node in the graph show its own actual request/response instead of both showing up at once
+// on whichever node the click landed on. /continue and /continue-to-authserver above are untouched
+// and keep backing the Manual configuration tab's single-click-per-hop flow.
+
+function resolveCallerCred(caller: { testClientSecret: string | null; testPrivateKeyPem: string | null; testPrivateKeyKid: string | null }): okta.AgentTestCredential {
+  return caller.testPrivateKeyPem && caller.testPrivateKeyKid
+    ? { privateKeyPem: caller.testPrivateKeyPem, privateKeyKid: caller.testPrivateKeyKid }
+    : { clientSecret: caller.testClientSecret! };
+}
+
+interface PendingExchange {
+  callerAgentId: string; authServerTokenEndpoint: string; idJag: string;
+  kind: 'agent' | 'authserver'; targetAgentDashboardId?: string; createdAt: number;
+}
+const pendingExchanges = new Map<string, PendingExchange>();
+
+// POST /api/exercise/agents/exercise/exchange — { rid, targetAgentId } (agent hop) or
+// { rid, connectionId } (authserver hop). Runs only the token-exchange half of a hop — same
+// delegation-link/connection resolution as /continue and /continue-to-authserver above — and
+// stashes the resulting id-jag for a later /redeem call instead of redeeming it immediately.
+router.post('/agents/exercise/exchange', async (req: Request, res: Response) => {
+  const { rid, targetAgentId, connectionId } = req.body;
+  if (!rid || (!targetAgentId && !connectionId)) {
+    return res.status(400).json({ error: 'rid and either targetAgentId or connectionId are required' });
+  }
+  try {
+    const result = results.get(rid);
+    if (!result) return res.status(404).json({ error: 'Token expired — please get a new one' });
+
+    const caller = await store.findAgentById(result.agentId);
+    if (!caller?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    if (!caller.testClientSecret && !(caller.testPrivateKeyPem && caller.testPrivateKeyKid)) {
+      return res.status(400).json({ error: 'No credential stored for this agent yet' });
+    }
+    const callerCred = resolveCallerCred(caller);
+    const orgTokenEndpoint = `${ORG()}/oauth2/v1/token`;
+
+    let step2: okta.ExerciseTokenResult;
+    let authServerTokenEndpoint: string;
+    let kind: 'agent' | 'authserver';
+    let targetAgentDashboardId: string | undefined;
+
+    if (targetAgentId) {
+      const target = await store.findAgentById(targetAgentId);
+      if (!target?.oktaAgentId) return res.status(404).json({ error: 'Target agent not found' });
+
+      const callerOktaAgent = await okta.getAIAgent(caller.oktaAgentId);
+      const callerOrn = okta.agentOrnFromLinks(callerOktaAgent._links);
+      if (!callerOrn) return res.status(400).json({ error: 'Could not resolve the logged-in agent\'s ORN' });
+
+      const targetOktaAgent = await okta.getAIAgent(target.oktaAgentId);
+      const targetOrn = okta.agentOrnFromLinks(targetOktaAgent._links);
+      if (!targetOrn) return res.status(400).json({ error: 'Could not resolve the target agent\'s ORN' });
+
+      const links = await okta.listDelegationLinksFrom(callerOrn);
+      const link = links.find((l) => ornsMatch(l.targetOrn, targetOrn));
+      if (!link) return res.status(400).json({ error: 'This agent is not authorized to call the selected target — configure Machine Access first' });
+      const authServerId = link.authorizationServerOrn.split(':').pop();
+      if (!authServerId) return res.status(500).json({ error: 'Could not resolve the delegation link\'s authorization server' });
+      const authServer = await okta.getAuthorizationServer(authServerId);
+      if (!authServer.issuer) return res.status(500).json({ error: 'Could not resolve the authorization server issuer' });
+
+      const targetResourceUrl = await okta.getAgentResourceUrl(target.oktaAgentId);
+      if (!targetResourceUrl) return res.status(400).json({ error: 'Target agent has no resourceUrl configured yet' });
+
+      authServerTokenEndpoint = `${authServer.issuer}/v1/token`;
+      kind = 'agent';
+      targetAgentDashboardId = target.id;
+      step2 = await okta.runIdJagExchange(
+        orgTokenEndpoint, caller.oktaAgentId, callerCred, result.rawToken, targetResourceUrl, authServer.issuer,
+        result.rawTokenType
+      );
+    } else {
+      const connections = await okta.listAgentConnections(caller.oktaAgentId);
+      const connection = connections.find((c) => c.id === connectionId && c.connectionType === 'IDENTITY_ASSERTION_CUSTOM_AS');
+      if (!connection?.authorizationServer?.issuerUrl || !connection.resourceIndicator) {
+        return res.status(400).json({ error: 'Authorization server connection not found or missing issuer/resource' });
+      }
+      authServerTokenEndpoint = `${connection.authorizationServer.issuerUrl}/v1/token`;
+      kind = 'authserver';
+      // Unlike the a2a case, a Custom AS exchange must NOT send `resource` — see /continue-to-authserver.
+      step2 = await okta.runIdJagExchange(
+        orgTokenEndpoint, caller.oktaAgentId, callerCred, result.rawToken,
+        undefined, connection.authorizationServer.issuerUrl, result.rawTokenType
+      );
+    }
+
+    if (!step2.ok || !step2.accessToken) return res.json({ step2 });
+
+    pruneExpired(pendingExchanges, 10 * 60 * 1000);
+    const exchangeRid = randomUUID();
+    pendingExchanges.set(exchangeRid, {
+      callerAgentId: caller.oktaAgentId, authServerTokenEndpoint, idJag: step2.accessToken,
+      kind, targetAgentDashboardId, createdAt: Date.now(),
+    });
+    res.json({ step2, exchangeRid });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/exercise/agents/exercise/redeem — { exchangeRid }: the redemption half of a hop,
+// triggered by clicking the TARGET node once its caller's /exchange has already run. Re-resolves
+// the caller's stored credential (not carried in pendingExchanges — credentials can be regenerated
+// between clicks) and redeems the stashed id-jag exactly as /continue's second half already does.
+router.post('/agents/exercise/redeem', async (req: Request, res: Response) => {
+  const { exchangeRid } = req.body;
+  if (!exchangeRid) return res.status(400).json({ error: 'exchangeRid is required' });
+  try {
+    const pending = pendingExchanges.get(exchangeRid);
+    if (!pending) return res.status(404).json({ error: 'Exchange expired — please run it again' });
+    pendingExchanges.delete(exchangeRid);
+
+    const caller = await store.findAgentByOktaId(pending.callerAgentId);
+    if (!caller) return res.status(404).json({ error: 'Agent not found' });
+    if (!caller.testClientSecret && !(caller.testPrivateKeyPem && caller.testPrivateKeyKid)) {
+      return res.status(400).json({ error: 'No credential stored for this agent yet' });
+    }
+    const callerCred = resolveCallerCred(caller);
+
+    const step3 = await okta.runJwtBearerRedemption(pending.authServerTokenEndpoint, pending.callerAgentId, callerCred, pending.idJag);
+    if (!step3.ok || !step3.accessToken || pending.kind === 'authserver') return res.json({ step3 });
+
+    // Agent hop — stash the delegated token under the TARGET agent so the graph can move the
+    // path onto it and let it act as the new caller for a further hop, same as /continue does.
+    pruneExpired(results, 10 * 60 * 1000);
+    const nextRid = randomUUID();
+    results.set(nextRid, {
+      decoded: { accessToken: step3.decoded },
+      rawToken: step3.accessToken,
+      rawTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+      agentId: pending.targetAgentDashboardId!,
+      createdAt: Date.now(),
+    });
+    res.json({ step3, nextRid });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 export default router;
