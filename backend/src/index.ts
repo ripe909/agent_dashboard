@@ -3,11 +3,13 @@ import express from 'express';
 import cors from 'cors';
 import agentsRouter, { syncAllOwners } from './routes/agents';
 import usersRouter from './routes/users';
+import groupsRouter from './routes/groups';
 import resourcesRouter from './routes/resources';
 import connectionsRouter from './routes/connections';
 import settingsRouter from './routes/settings';
 import exerciseRouter from './routes/exercise';
 import appsRouter from './routes/apps';
+import agentRequestsRouter from './routes/agentRequests';
 import { eventBus, OktaApiEvent } from './services/eventBus';
 import { store } from './db/client';
 
@@ -66,10 +68,12 @@ app.get('/api/events', (req, res) => {
 app.use('/api/agents', agentsRouter);
 app.use('/api/agents', connectionsRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/groups', groupsRouter);
 app.use('/api/resources', resourcesRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/exercise', exerciseRouter);
 app.use('/api/apps', appsRouter);
+app.use('/api/agent-requests', agentRequestsRouter);
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);

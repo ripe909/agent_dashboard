@@ -13,10 +13,11 @@ const GOV_ORG = () => toAdminUrl(ORG());
 const AUTH_MODE = () => process.env.OKTA_AUTH_MODE || 'api_token';
 // okta.governance.resourceOwner.{read,manage}, okta.authorizationServers.read, okta.clients.read
 // (needed to read a native agent's real token_endpoint_auth_method from /oauth2/v1/clients/{id} —
-// see getNativeAgentCredentials), and okta.clients.manage (needed to PUT a corrected
-// token_endpoint_auth_method — see createAgentSecret) must also be granted on the M2M app's API
-// Scopes tab.
-const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage okta.authorizationServers.read okta.clients.read okta.clients.manage';
+// see getNativeAgentCredentials), okta.clients.manage (needed to PUT a corrected
+// token_endpoint_auth_method — see createAgentSecret), and okta.groups.read (needed for the
+// agent-request wizard's group picker — see listGroups) must also be granted on the M2M app's
+// API Scopes tab.
+const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage okta.authorizationServers.read okta.clients.read okta.clients.manage okta.groups.read';
 
 function toAdminUrl(orgUrl: string): string {
   return orgUrl
@@ -186,6 +187,19 @@ export async function listUsers(query?: string, limit = 25): Promise<OktaUser[]>
   }));
 }
 
+export interface OktaGroup {
+  id: string; name: string; description?: string;
+}
+
+export async function listGroups(query?: string, limit = 25): Promise<OktaGroup[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (query) params.set('q', query);
+  const res = await sswsFetch(`/api/v1/groups?${params}`);
+  if (!res.ok) throw new Error(`listGroups ${res.status}: ${await res.text()}`);
+  const groups = await res.json() as any[];
+  return groups.map((g) => ({ id: g.id, name: g.profile.name, description: g.profile.description }));
+}
+
 export async function getUser(userId: string): Promise<OktaUser> {
   const res = await sswsFetch(`/api/v1/users/${userId}`);
   if (!res.ok) throw new Error(`getUser ${res.status}`);
@@ -335,6 +349,14 @@ export async function assignUserToApp(appId: string, userId: string): Promise<vo
   if (!res.ok) {
     const err = await res.json() as any;
     throw new Error(err.errorSummary || `assignUserToApp ${res.status}`);
+  }
+}
+
+export async function assignGroupToApp(appId: string, groupId: string): Promise<void> {
+  const res = await sswsFetch(`/api/v1/apps/${appId}/groups/${groupId}`, { method: 'PUT' });
+  if (!res.ok) {
+    const err = await res.json() as any;
+    throw new Error(err.errorSummary || `assignGroupToApp ${res.status}`);
   }
 }
 
@@ -972,9 +994,10 @@ export interface PotentialConnection {
   // IDENTITY_ASSERTION_CUSTOM_AS / A2A_SERVER
   authorizationServer?: { name: string; issuerUrl: string; orn: string; _links?: any };
   resourceIndicator?: string;
-  // STS_ACCESS_TOKEN / APP_INSTANCE
+  // STS_ACCESS_TOKEN / APP_INSTANCE / A2A_SERVER (A2A uses resource.name + resource.orn to
+  // identify the target agent, alongside authorizationServer above)
   resource?: {
-    appInstanceId?: string; appInstanceName?: string;
+    appInstanceId?: string; appInstanceName?: string; name?: string;
     clientAuthSettings?: { name: string; orn: string };
     resourceType?: string; orn?: string; _links?: any;
   };

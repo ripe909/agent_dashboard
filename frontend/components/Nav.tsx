@@ -3,9 +3,10 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
-import { Bot, Users, Puzzle, LayoutDashboard, LogOut, Settings, PlayCircle } from 'lucide-react';
+import { Bot, Users, Puzzle, LayoutDashboard, LogOut, Settings, PlayCircle, Boxes } from 'lucide-react';
 import clsx from 'clsx';
 import SettingsModal from './SettingsModal';
+import { portalConfig } from '@/lib/portalConfig';
 
 const links = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -54,6 +55,15 @@ export default function Nav({ user }: Props) {
             </Link>
           );
         })}
+        <div className="pt-2 mt-2 border-t border-[var(--border-default)]">
+          <Link
+            href="/request"
+            className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium border-l-2 border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-muted)] transition-colors"
+          >
+            <Boxes className="w-4 h-4" />
+            {portalConfig.name} Portal
+          </Link>
+        </div>
       </nav>
 
       <div className="px-4 py-4 border-t border-[var(--border-default)]">

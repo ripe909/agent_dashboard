@@ -4,6 +4,7 @@ import StatusBadge from '@/components/StatusBadge';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import AgentDetailTabs from './AgentDetailTabs';
 import AgentActionsMenu from './AgentActionsMenu';
+import ViewRelationshipsButton from './ViewRelationshipsButton';
 import { Bot, ExternalLink } from 'lucide-react';
 
 const OKTA_ORG = process.env.NEXT_PUBLIC_OKTA_ORG || '';
@@ -83,6 +84,7 @@ export default async function AgentDetailPage({ params }: { params: { id: string
           >
             View log <ExternalLink className="w-3.5 h-3.5" />
           </a>
+          <ViewRelationshipsButton agentId={agent.id} agentName={agent.name} owner={currentOwner} />
           <AgentActionsMenu agentId={agent.id} agentName={agent.name} currentStatus={liveStatus} />
         </div>
       </div>

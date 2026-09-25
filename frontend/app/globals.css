@@ -22,6 +22,22 @@
   --text-muted: #64748b;
 }
 
+/* Request portal persona — scoped to the (request) route group only. --portal-primary and
+   --portal-accent are default colours; both can be overridden per-deployment via
+   NEXT_PUBLIC_PORTAL_PRIMARY_COLOR / NEXT_PUBLIC_PORTAL_ACCENT_COLOR (see (request)/layout.tsx,
+   which sets them as inline style overrides on the root element when configured). */
+.agent-request-theme {
+  --bg-page: #f5f7fa;
+  --bg-surface: #ffffff;
+  --bg-surface-muted: #eef2f7;
+  --border-default: #dbe3ec;
+  --text-primary: #041e42;
+  --text-secondary: #4a5a6b;
+  --text-muted: #8a97a6;
+  --portal-primary: #004b93;
+  --portal-accent: #e32934;
+}
+
 body {
   background-color: var(--bg-page);
   color: var(--text-primary);
