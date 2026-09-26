@@ -1,11 +1,12 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Boxes, Cpu } from 'lucide-react';
+import { Boxes } from 'lucide-react';
 import type { AppNodeData } from '../graphData';
 import TokenIcons, { type TokenIconsProps } from './TokenIcons';
 
 // The service-client app (Settings > Service Client) is rendered as a normal app-caller node but
 // doubles as the Machine Access "start here" point — same identity, so no separate origin node —
-// styled with a dashed border and a Cpu badge to match OriginNode.tsx's "start here" affordance.
+// styled with a dashed border and the same "Start here" header OriginNode.tsx uses for User
+// Access, so both start points read consistently regardless of which access pattern they're for.
 export default function AppNode({ data }: NodeProps & { data: AppNodeData & TokenIconsProps & { selected: boolean; onSelect: () => void } }) {
   return (
     <div
@@ -24,13 +25,8 @@ export default function AppNode({ data }: NodeProps & { data: AppNodeData & Toke
           <Boxes className="w-3.5 h-3.5 text-emerald-600" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wide flex items-center gap-1">
-            Application
-            {data.isMachineOrigin && (
-              <span className="flex items-center gap-0.5 text-[#a78bfa] normal-case font-medium">
-                <Cpu className="w-2.5 h-2.5" /> start here
-              </span>
-            )}
+          <div className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wide">
+            {data.isMachineOrigin ? 'Start here' : 'Application'}
           </div>
           <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{data.name}</div>
         </div>
