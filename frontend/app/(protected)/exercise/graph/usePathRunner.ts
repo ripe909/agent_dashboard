@@ -41,13 +41,19 @@ export function usePathRunner() {
   // node for steps[0]; the CALLER node for an exchange; the TARGET node for a redemption). Lets
   // ExerciseGraph.tsx attach request/response icons to the specific node each token belongs to.
   const [pathNodeIds, setPathNodeIds] = useState<string[]>([]);
+  // Ordered list of graph node ids the path's "current position" has actually occupied, in visit
+  // order (start node, then wherever each successful redeem/login lands) — distinct from
+  // pathNodeIds above, which can repeat the same node (exchange + redeem both attach to the
+  // caller). ExerciseGraph.tsx diffs consecutive pairs to know which edges were actually
+  // traveled, so it can render them green instead of the "next hop available" blue.
+  const [visitedNodeIds, setVisitedNodeIds] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
 
   const reset = useCallback(() => {
     setCurrentNodeId(null); setActingAgentId(null); setRid(null);
     setAwaitingLogin(false); setComplete(false); setPendingExchange(null);
-    setSteps([]); setPathNodeIds([]); setError('');
+    setSteps([]); setPathNodeIds([]); setVisitedNodeIds([]); setError('');
   }, []);
 
   // Triggered by clicking the service-client app node (AppNode.tsx, isMachineOrigin) — that node
@@ -72,6 +78,7 @@ export function usePathRunner() {
         return;
       }
       setCurrentNodeId(agentNodeId);
+      setVisitedNodeIds([appNodeId, agentNodeId]);
       setActingAgentId(agentDashboardId);
       setRid(data.rid);
     } catch (e: any) { setError(e.message); }
@@ -101,6 +108,7 @@ export function usePathRunner() {
     ]);
     setPathNodeIds([originNodeId]);
     setCurrentNodeId(agentNodeId);
+    setVisitedNodeIds([originNodeId, agentNodeId]);
     setActingAgentId(agentDashboardId);
     setRid(loginRid);
   }
@@ -188,6 +196,7 @@ export function usePathRunner() {
       if (wasAgentHop && data.nextRid) {
         const targetDashboardId = targetNodeId.replace(/^agent:/, '');
         setCurrentNodeId(targetNodeId);
+        setVisitedNodeIds((prev) => [...prev, targetNodeId]);
         setActingAgentId(targetDashboardId);
         setRid(data.nextRid);
         setRunning(false);
@@ -197,6 +206,7 @@ export function usePathRunner() {
         // moves to the target so its icon (and the selected-node ring) reflects where the chain
         // actually ended, instead of leaving the ring stuck on the node clicked to trigger redeem.
         setCurrentNodeId(targetNodeId);
+        setVisitedNodeIds((prev) => [...prev, targetNodeId]);
         setComplete(true);
         setRunning(false);
         return { landedNodeId: targetNodeId, isAgentHop: false };
@@ -208,7 +218,7 @@ export function usePathRunner() {
 
   return {
     currentNodeId, actingAgentId, awaitingLogin, complete, pendingExchange,
-    steps, pathNodeIds, running, error,
+    steps, pathNodeIds, visitedNodeIds, running, error,
     startMachine, startUser, resumeFromLogin,
     runExchange, runRedeem, reset,
   };

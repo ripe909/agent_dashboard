@@ -230,6 +230,21 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
     return new Set(startNodeIds);
   }, [runner.currentNodeId, rawNodes]);
 
+  // Edge ids actually traveled so far — consecutive pairs in visitedNodeIds (the ordered sequence
+  // of "current position" moves) matched back against the real edge between them. Rendered green
+  // and solid, distinct from highlightSources' blue "next hop available" animation on the edges
+  // leading OUT of wherever the path currently sits.
+  const traveledEdgeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (let i = 0; i < runner.visitedNodeIds.length - 1; i++) {
+      const from = runner.visitedNodeIds[i];
+      const to = runner.visitedNodeIds[i + 1];
+      const edge = rawEdges.find((e) => e.source === from && e.target === to);
+      if (edge) ids.add(edge.id);
+    }
+    return ids;
+  }, [runner.visitedNodeIds, rawEdges]);
+
   useEffect(() => {
     setNodes(
       layoutedNodes.map((n) => {
@@ -249,15 +264,19 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
       })
     );
     setEdges(
-      rawEdges.map((e) => ({
-        id: e.id, source: e.source, target: e.target, label: e.label,
-        animated: highlightSources.has(e.source),
-        style: highlightSources.has(e.source) ? { stroke: '#1662dd', strokeWidth: 2 } : undefined,
-        labelStyle: { fontSize: 11, fill: 'var(--text-secondary)' },
-      }))
+      rawEdges.map((e) => {
+        const traveled = traveledEdgeIds.has(e.id);
+        const nextHop = highlightSources.has(e.source);
+        return {
+          id: e.id, source: e.source, target: e.target, label: e.label,
+          animated: nextHop,
+          style: traveled ? { stroke: '#10b981', strokeWidth: 2.5 } : nextHop ? { stroke: '#1662dd', strokeWidth: 2 } : undefined,
+          labelStyle: { fontSize: 11, fill: 'var(--text-secondary)' },
+        };
+      })
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutedNodes, rawEdges, expandedIds, expandingId, runner.currentNodeId, hopByNodeId, highlightSources]);
+  }, [layoutedNodes, rawEdges, expandedIds, expandingId, runner.currentNodeId, hopByNodeId, highlightSources, traveledEdgeIds]);
 
   // Click model (4 clicks for a 3-hop chain — service app, EC10, ET10, authz server):
   // 1. Click the "start here" node (app/origin) → gets the initial token, lands on the first agent.

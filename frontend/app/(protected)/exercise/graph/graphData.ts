@@ -86,7 +86,7 @@ export async function fetchNeighbors(dashboardAgentId: string, agents: AgentOpti
         const id = appNodeId(c.callerAgentId);
         const isMachineOrigin = !!serviceClientId && c.callerAgentId === serviceClientId;
         nodes.push({ id, data: { kind: 'app', oktaAppId: c.callerAgentId, name: c.callerName || 'App', isMachineOrigin } });
-        edges.push({ id: `e:${id}->${selfNodeId}`, source: id, target: selfNodeId, label: 'Machine access' });
+        edges.push({ id: `e:${id}->${selfNodeId}`, source: id, target: selfNodeId, label: 'Machine' });
       } else {
         const callerAgent = agents.find((a) => a.oktaAgentId === c.callerAgentId);
         const id = agentNodeId(callerAgent?.id || c.callerAgentId);
@@ -94,7 +94,7 @@ export async function fetchNeighbors(dashboardAgentId: string, agents: AgentOpti
           id,
           data: { kind: 'agent', dashboardId: callerAgent?.id || c.callerAgentId, oktaAgentId: c.callerAgentId, name: c.callerName || callerAgent?.name || 'Agent' },
         });
-        edges.push({ id: `e:${id}->${selfNodeId}`, source: id, target: selfNodeId, label: 'Machine access' });
+        edges.push({ id: `e:${id}->${selfNodeId}`, source: id, target: selfNodeId, label: 'Machine' });
       }
     }
   }
@@ -104,7 +104,7 @@ export async function fetchNeighbors(dashboardAgentId: string, agents: AgentOpti
   if (agentDetail?.userAccessEnabled) {
     const id = originNodeId(dashboardAgentId);
     nodes.push({ id, data: { kind: 'origin', originKind: 'user', agentDashboardId: dashboardAgentId, label: 'User login' } });
-    edges.push({ id: `e:${id}->${selfNodeId}`, source: id, target: selfNodeId, label: 'User access' });
+    edges.push({ id: `e:${id}->${selfNodeId}`, source: id, target: selfNodeId, label: 'User' });
   }
 
   // Downstream agents fanning out to the right.
@@ -116,7 +116,7 @@ export async function fetchNeighbors(dashboardAgentId: string, agents: AgentOpti
         id,
         data: { kind: 'agent', dashboardId: targetAgent?.id || d.targetAgentId, oktaAgentId: d.targetAgentId, name: d.targetName || targetAgent?.name || 'Agent' },
       });
-      edges.push({ id: `e:${selfNodeId}->${id}`, source: selfNodeId, target: id, label: 'Machine access' });
+      edges.push({ id: `e:${selfNodeId}->${id}`, source: selfNodeId, target: id, label: 'Machine' });
     }
   }
 
