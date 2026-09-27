@@ -6,7 +6,7 @@ interface AgentOption { id: string; name: string; description?: string; }
 
 export default async function ChatPage() {
   let agents: AgentOption[] = [];
-  try { agents = await apiFetch<AgentOption[]>('/api/agents'); } catch {}
+  try { agents = await apiFetch<AgentOption[]>('/api/chat/eligible-agents'); } catch {}
 
   return (
     <div>

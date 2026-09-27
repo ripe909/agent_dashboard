@@ -149,7 +149,12 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
               {selectedAgent.name}
             </button>
           ) : (
-            <AgentPicker excludeAgentId="" onSelect={selectAgent} />
+            <AgentPicker
+              excludeAgentId=""
+              onSelect={selectAgent}
+              endpoint="/api/chat/eligible-agents"
+              emptyMessage="No agents are connected to the Campaigns authorization server yet"
+            />
           )}
         </div>
         <div className="ml-auto flex items-center gap-3">

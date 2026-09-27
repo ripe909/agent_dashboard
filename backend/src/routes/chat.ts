@@ -39,6 +39,62 @@ function base64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// Runs `fn` over `items` with at most `limit` in flight at once — checking every onboarded agent's
+// connections for /eligible-agents below used to fire all of them via a single Promise.all, which
+// (confirmed live) burns through Okta's per-endpoint rate limit (x-rate-limit-limit: 100 on
+// /ai-agents/{id}/connections) in one burst on any org with a few dozen agents, 429-ing most of
+// the batch — listAgentConnections silently treats a 429 as "no connections", so the whole picker
+// would intermittently come back empty. A small concurrency cap keeps every request under budget.
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+// Short-lived cache — connection state changes rarely (only when someone edits a resource
+// connection), so it's safe to reuse the last result for a few seconds instead of re-querying
+// Okta for every onboarded agent on every picker open.
+let eligibleAgentsCache: { value: any[]; expiresAt: number } | null = null;
+
+// GET /api/chat/eligible-agents — only agents with an ACTIVE Custom AS connection to the
+// configured Campaigns authorization server can actually chat (everything downstream depends on
+// that connection), so the picker should only ever offer those instead of every onboarded agent.
+router.get('/eligible-agents', async (_req: Request, res: Response) => {
+  try {
+    if (eligibleAgentsCache && eligibleAgentsCache.expiresAt > Date.now()) {
+      return res.json(eligibleAgentsCache.value);
+    }
+
+    const settings = await store.getSettings();
+    if (!settings.campaignsAuthorizationServerId) return res.json([]);
+    const campaignsAS = await okta.getAuthorizationServer(settings.campaignsAuthorizationServerId);
+    if (!campaignsAS.issuer) return res.json([]);
+
+    const all = await store.listAgents();
+    const eligible = await mapWithConcurrency(all.filter((a) => a.oktaAgentId), 5, async (a) => {
+      const connections = await okta.listAgentConnections(a.oktaAgentId!).catch(() => []);
+      const connected = connections.some(
+        (c) => c.connectionType === 'IDENTITY_ASSERTION_CUSTOM_AS' && c.status === 'ACTIVE' && c.authorizationServer?.issuerUrl === campaignsAS.issuer
+      );
+      return connected ? { id: a.id, name: a.name, description: a.description } : null;
+    });
+
+    const result = eligible.filter(Boolean);
+    eligibleAgentsCache = { value: result, expiresAt: Date.now() + 30_000 };
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/chat/:agentId/login/start
 router.post('/:agentId/login/start', async (req: Request, res: Response) => {
   try {

@@ -26,6 +26,12 @@ function toAdminUrl(orgUrl: string): string {
 }
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
+// Single-flight guard: many routes fan out N concurrent Okta calls (e.g. eligible-agents checks
+// every onboarded agent's connections in parallel) — without this, each of those N calls would see
+// the token as expired at the same instant and independently fire its own token request, which can
+// trip Okta's token-endpoint rate limiting. All concurrent callers now await the same in-flight
+// refresh instead.
+let inFlightRefresh: Promise<string> | null = null;
 
 // private_key_jwt client assertion — the org authorization server requires this
 // for client_credentials instead of a plain client secret (RFC 7523 / 7521).
@@ -83,7 +89,10 @@ async function fetchM2MAccessToken(): Promise<string> {
 async function getAuthHeader(): Promise<string> {
   if (AUTH_MODE() === 'client_credentials') {
     if (cachedToken && cachedToken.expiresAt > Date.now()) return `Bearer ${cachedToken.value}`;
-    return `Bearer ${await fetchM2MAccessToken()}`;
+    if (!inFlightRefresh) {
+      inFlightRefresh = fetchM2MAccessToken().finally(() => { inFlightRefresh = null; });
+    }
+    return `Bearer ${await inFlightRefresh}`;
   }
   return `SSWS ${process.env.OKTA_API_TOKEN}`;
 }
