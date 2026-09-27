@@ -14,7 +14,6 @@ const links = [
   { href: '/users', label: 'Users', icon: Users },
   { href: '/resources', label: 'Resources', icon: Puzzle },
   { href: '/exercise', label: 'Exercise', icon: PlayCircle },
-  { href: '/chat', label: 'Chat', icon: MessageSquare },
 ];
 
 interface Props {
@@ -56,13 +55,25 @@ export default function Nav({ user }: Props) {
             </Link>
           );
         })}
-        <div className="pt-2 mt-2 border-t border-[var(--border-default)]">
+        <div className="pt-2 mt-2 border-t border-[var(--border-default)] space-y-0.5">
           <Link
             href="/request"
             className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium border-l-2 border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-muted)] transition-colors"
           >
             <Boxes className="w-4 h-4" />
             {portalConfig.name} Portal
+          </Link>
+          <Link
+            href="/chat"
+            className={clsx(
+              'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors border-l-2',
+              pathname.startsWith('/chat')
+                ? 'bg-blue-50 text-[#1662dd] border-[#1662dd]'
+                : 'text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-muted)]'
+            )}
+          >
+            <MessageSquare className="w-4 h-4" />
+            Chat
           </Link>
         </div>
       </nav>
