@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, ArrowRight, Bot, Search, X, Check, UserCheck, Cpu, Key, Lock,
   Shield, Server, Zap, Link2, RefreshCw, CheckCircle2, ExternalLink, Plus, ChevronRight, Users,
-  KeyRound, ShieldCheck, Clock, FileSearch,
+  KeyRound, ShieldCheck, Clock, FileSearch, MessageSquare,
 } from 'lucide-react';
 
 import { portalConfig } from '@/lib/portalConfig';
@@ -380,7 +380,7 @@ export default function NewAgentRequestPage() {
   // Submission
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [submitted, setSubmitted] = useState<{ adminConsoleUrl?: string } | null>(null);
+  const [submitted, setSubmitted] = useState<{ agentId?: string; adminConsoleUrl?: string } | null>(null);
 
   // Prefill owner from the logged-in session
   useEffect(() => {
@@ -499,6 +499,14 @@ export default function NewAgentRequestPage() {
               className="flex items-center gap-2 px-4 py-2.5 bg-[var(--portal-primary)] hover:opacity-90 text-white text-sm font-semibold rounded-lg transition-opacity"
             >
               View in Okta Admin Console <ExternalLink className="w-4 h-4" />
+            </a>
+          )}
+          {submitted.agentId && (
+            <a
+              href={`/chat?agentId=${submitted.agentId}`}
+              className="flex items-center gap-2 px-4 py-2.5 border border-[var(--portal-primary)]/40 text-[var(--portal-primary)] hover:bg-[var(--portal-primary)]/10 text-sm font-semibold rounded-lg transition-colors"
+            >
+              <MessageSquare className="w-4 h-4" /> Chat with Agent
             </a>
           )}
           <button

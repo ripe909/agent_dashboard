@@ -83,18 +83,28 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     const agentId = searchParams.get('agentId');
     const mode = searchParams.get('scopeMode');
     if (err) { setError(err); router.replace('/chat'); return; }
-    if (!result || !agentId || (mode !== 'readonly' && mode !== 'full')) return;
-    const agent = agents.find((a) => a.id === agentId);
-    if (agent) {
-      storeLoginRid(agentId, mode, result);
-      setSelectedAgent(agent);
-      setActiveMode(mode);
-      setLoginRid(result);
-      setError('');
+    if (result && agentId && (mode === 'readonly' || mode === 'full')) {
+      const agent = agents.find((a) => a.id === agentId);
+      if (agent) {
+        storeLoginRid(agentId, mode, result);
+        setSelectedAgent(agent);
+        setActiveMode(mode);
+        setLoginRid(result);
+        setError('');
+      }
+      router.replace('/chat');
+      return;
     }
-    router.replace('/chat');
+    // Plain deep-link (e.g. the portal's "Chat with Agent" button) — pre-select the agent if
+    // it's actually eligible (connected to the Campaigns AS); otherwise leave the picker as-is,
+    // since there's nothing useful to select yet.
+    if (agentId && !result) {
+      const agent = agents.find((a) => a.id === agentId);
+      if (agent) selectAgent(agent);
+      router.replace('/chat');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, agents]);
 
   function selectAgent(agent: AgentOption) {
     setSelectedAgent(agent);
