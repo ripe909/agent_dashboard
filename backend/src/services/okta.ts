@@ -459,6 +459,15 @@ export async function getAuthorizationServer(authServerId: string): Promise<{ id
   return { id: s.id, name: s.name, issuer: s.issuer };
 }
 
+export interface AuthorizationServerScope { id: string; name: string; description: string | null; system: boolean; }
+
+export async function listAuthorizationServerScopes(authServerId: string): Promise<AuthorizationServerScope[]> {
+  const res = await sswsFetch(`/api/v1/authorizationServers/${authServerId}/scopes`);
+  if (!res.ok) throw new Error(`listAuthorizationServerScopes ${res.status}: ${await res.text()}`);
+  const scopes = await res.json() as any[];
+  return scopes.map((s) => ({ id: s.id, name: s.name, description: s.description ?? null, system: !!s.system }));
+}
+
 // The agent's own /ai-agents/{id} response never includes resourceUrl — it only shows up on the
 // auto-created a2a resource server once set (and can't be changed after that point).
 export async function getAgentResourceUrl(agentId: string): Promise<string | undefined> {
@@ -1002,6 +1011,9 @@ export interface PotentialConnection {
     clientAuthSettings?: { name: string; orn: string };
     resourceType?: string; orn?: string; _links?: any;
   };
+  // IDENTITY_ASSERTION_CUSTOM_AS only — set by the frontend's scope picker before POSTing.
+  // Present and non-empty => grant only these scopes; absent/empty => grant all (unchanged default).
+  selectedScopes?: string[];
 }
 
 export async function listPotentialConnections(types?: ConnectionType[]): Promise<PotentialConnection[]> {
@@ -1048,8 +1060,9 @@ export async function createAgentConnection(
       body = {
         connectionType: connection.connectionType,
         authorizationServer: { orn: connection.authorizationServer!.orn },
-        scopeCondition: 'ALL_SCOPES',
-        scopes: ['*'],
+        ...(connection.selectedScopes && connection.selectedScopes.length > 0
+          ? { scopeCondition: 'INCLUDE_ONLY', scopes: connection.selectedScopes }
+          : { scopeCondition: 'ALL_SCOPES', scopes: ['*'] }),
       };
       if (connection.resourceIndicator) body.resourceIndicator = connection.resourceIndicator;
       break;

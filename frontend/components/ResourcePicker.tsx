@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { Check, X, Plus, Shield, Server, Zap, Link2, Trash2, RefreshCw, ChevronRight, ArrowLeft } from 'lucide-react';
+import ScopeSelector from './ScopeSelector';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
@@ -15,6 +16,7 @@ interface PotentialConnection {
     clientAuthSettings?: { name: string; orn: string };
     orn?: string; name?: string;
   };
+  selectedScopes?: string[];
 }
 
 interface AgentConnection {
@@ -120,6 +122,10 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
   const [adding, setAdding] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState('');
+  // Custom AS connections go through an extra confirm step (pick scopes, then Connect) instead
+  // of adding immediately on click, like every other resource type does.
+  const [pendingAuthServer, setPendingAuthServer] = useState<PotentialConnection | null>(null);
+  const [pendingScopes, setPendingScopes] = useState<string[] | undefined>(undefined);
 
   const loadConnections = useCallback(async () => {
     setLoadingConnections(true);
@@ -151,6 +157,12 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
     if (!loadingConnections) onStatusChange?.(connections.length > 0);
   }, [loadingConnections, connections.length]);
 
+  // Leaving the auth-server resource-type step (back, close, or switching types) should always
+  // collapse any open scope-confirm panel — it's meaningless once its row is no longer visible.
+  useEffect(() => {
+    if (step !== 'auth_server') { setPendingAuthServer(null); setPendingScopes(undefined); }
+  }, [step]);
+
   // ── Connected ORNs (to skip already-connected items) ──────────────────────
   const connectedOrns = new Set(connections.map(c =>
     c.authorizationServer?.orn ||
@@ -169,8 +181,10 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
   );
 
   // ── Add connection ─────────────────────────────────────────────────────────
-  async function addConnection(conn: PotentialConnection) {
-    const key = JSON.stringify(conn);
+  // trackingKey lets a caller add scopes to `conn` (which would otherwise change its
+  // JSON.stringify key) while still matching the row's own isAdding/spinner check.
+  async function addConnection(conn: PotentialConnection, trackingKey?: string) {
+    const key = trackingKey ?? JSON.stringify(conn);
     setAdding(key); setError('');
     try {
       const res = await fetch(`${BACKEND}/api/agents/${agentId}/connections`, {
@@ -181,6 +195,8 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
       if (!res.ok) { setError(data.error || 'Failed to create connection'); setAdding(null); return; }
       await loadConnections();
       setStep('closed');
+      setPendingAuthServer(null);
+      setPendingScopes(undefined);
     } catch (e: any) { setError(e.message); }
     setAdding(null);
   }
@@ -415,26 +431,49 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
                 const name = connectionName(conn);
                 const sub = connectionSub(conn);
                 const Icon = selectedType.icon;
+                const isPending = pendingAuthServer === conn;
                 return (
-                  <button
-                    key={idx}
-                    onClick={() => addConnection(conn)}
-                    disabled={!!adding}
-                    className="w-full flex items-center gap-3 px-3 py-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] hover:border-[#1662dd]/40 rounded-lg text-left transition-colors disabled:opacity-50"
-                  >
-                    <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${selectedType.colour}1a` }}>
-                      <Icon className="w-3.5 h-3.5" style={{ color: selectedType.colour }} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-[var(--text-primary)] truncate">{name}</div>
-                      {sub && <div className="text-xs text-[var(--text-secondary)] truncate font-mono">{sub}</div>}
-                    </div>
-                    {isAdding ? (
-                      <RefreshCw className="w-4 h-4 text-[#1662dd] animate-spin flex-shrink-0" />
-                    ) : (
-                      <Plus className="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+                  <div key={idx}>
+                    <button
+                      onClick={() => selectedType.id === 'auth_server'
+                        ? setPendingAuthServer(isPending ? null : conn)
+                        : addConnection(conn)}
+                      disabled={!!adding}
+                      className={`w-full flex items-center gap-3 px-3 py-3 bg-[var(--bg-surface-muted)] border rounded-lg text-left transition-colors disabled:opacity-50 ${
+                        isPending ? 'border-[#1662dd]/40' : 'border-[var(--border-default)] hover:border-[#1662dd]/40'
+                      }`}
+                    >
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${selectedType.colour}1a` }}>
+                        <Icon className="w-3.5 h-3.5" style={{ color: selectedType.colour }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-[var(--text-primary)] truncate">{name}</div>
+                        {sub && <div className="text-xs text-[var(--text-secondary)] truncate font-mono">{sub}</div>}
+                      </div>
+                      {isAdding ? (
+                        <RefreshCw className="w-4 h-4 text-[#1662dd] animate-spin flex-shrink-0" />
+                      ) : (
+                        <Plus className="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+                      )}
+                    </button>
+                    {isPending && conn.authorizationServer?.orn && (
+                      <div className="mt-2 p-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg space-y-3">
+                        <ScopeSelector
+                          agentId={agentId}
+                          authServerOrn={conn.authorizationServer.orn}
+                          onChange={setPendingScopes}
+                        />
+                        <button
+                          onClick={() => addConnection({ ...conn, selectedScopes: pendingScopes }, key)}
+                          disabled={!!adding}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd] text-white rounded-lg hover:bg-[#1662dd]/90 transition-colors disabled:opacity-40"
+                        >
+                          {adding === key ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                          Connect
+                        </button>
+                      </div>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>

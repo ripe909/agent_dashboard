@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 
 import { portalConfig } from '@/lib/portalConfig';
+import ScopeSelector from '@/components/ScopeSelector';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
@@ -34,6 +35,7 @@ interface PotentialConnection {
   connectionType: string;
   authorizationServer?: { name: string; issuerUrl?: string; orn: string };
   resource?: { appInstanceName?: string; name?: string; orn?: string; clientAuthSettings?: { name: string; orn: string } };
+  selectedScopes?: string[];
 }
 
 const STEPS = ['Name & Owner', 'Access Pattern', 'Credentials', 'Resources', 'Review'] as const;
@@ -429,6 +431,14 @@ export default function NewAgentRequestPage() {
     );
   }
 
+  // Custom AS connections go through an extra confirm step (pick scopes, then Add) instead of
+  // toggling straight into selectedConnections, same UX as the admin console's ResourcePicker.
+  const [pendingAuthServerOrn, setPendingAuthServerOrn] = useState<string | null>(null);
+  const [pendingScopes, setPendingScopes] = useState<string[] | undefined>(undefined);
+  useEffect(() => {
+    if (resourceStep !== 'auth_server') { setPendingAuthServerOrn(null); setPendingScopes(undefined); }
+  }, [resourceStep]);
+
   const canAdvance =
     step === 0 ? name.trim().length > 0 && !!owner :
     step === 1 ? userAccess || machineAccess :
@@ -728,7 +738,12 @@ export default function NewAgentRequestPage() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-[var(--text-primary)] truncate">{connectionName(c)}</div>
-                          <div className="text-xs text-[var(--text-secondary)]">{typeDef?.label || c.connectionType}</div>
+                          <div className="text-xs text-[var(--text-secondary)]">
+                            {typeDef?.label || c.connectionType}
+                            {c.connectionType === 'IDENTITY_ASSERTION_CUSTOM_AS' && (
+                              <span> · {c.selectedScopes && c.selectedScopes.length > 0 ? `${c.selectedScopes.length} scope${c.selectedScopes.length > 1 ? 's' : ''}` : 'All scopes'}</span>
+                            )}
+                          </div>
                         </div>
                         <button onClick={() => toggleConnection(c)} className="text-[var(--text-muted)] hover:text-red-600 flex-shrink-0"><X className="w-4 h-4" /></button>
                       </div>
@@ -796,15 +811,34 @@ export default function NewAgentRequestPage() {
                     {filteredForType.map((item) => {
                       const orn = connectionOrn(item);
                       const checked = selectedOrns.has(orn);
+                      const isPending = pendingAuthServerOrn === orn;
                       return (
-                        <button
-                          key={orn}
-                          onClick={() => toggleConnection(item)}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors ${checked ? 'border-[var(--portal-primary)]/40 bg-[var(--portal-primary)]/5' : 'border-[var(--border-default)] bg-[var(--bg-surface)] hover:border-[var(--portal-primary)]/30'}`}
-                        >
-                          <span className="text-sm text-[var(--text-primary)] flex-1">{connectionName(item)}</span>
-                          {checked && <Check className="w-4 h-4 text-[var(--portal-primary)] flex-shrink-0" />}
-                        </button>
+                        <div key={orn}>
+                          <button
+                            onClick={() => selectedType.id === 'auth_server'
+                              ? setPendingAuthServerOrn(isPending ? null : orn)
+                              : toggleConnection(item)}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors ${checked || isPending ? 'border-[var(--portal-primary)]/40 bg-[var(--portal-primary)]/5' : 'border-[var(--border-default)] bg-[var(--bg-surface)] hover:border-[var(--portal-primary)]/30'}`}
+                          >
+                            <span className="text-sm text-[var(--text-primary)] flex-1">{connectionName(item)}</span>
+                            {checked && <Check className="w-4 h-4 text-[var(--portal-primary)] flex-shrink-0" />}
+                          </button>
+                          {isPending && item.authorizationServer?.orn && (
+                            <div className="mt-2 p-3 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg space-y-3">
+                              <ScopeSelector
+                                agentId="pending"
+                                authServerOrn={item.authorizationServer.orn}
+                                onChange={setPendingScopes}
+                              />
+                              <button
+                                onClick={() => { toggleConnection({ ...item, selectedScopes: pendingScopes }); setPendingAuthServerOrn(null); setPendingScopes(undefined); }}
+                                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[var(--portal-primary)] text-white rounded-lg hover:opacity-90 transition-colors"
+                              >
+                                <Plus className="w-3.5 h-3.5" /> Add
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
