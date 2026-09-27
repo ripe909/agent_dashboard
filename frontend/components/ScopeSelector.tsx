@@ -10,18 +10,22 @@ interface Props {
   agentId: string;
   authServerOrn: string;
   onChange: (selectedScopes: string[] | undefined) => void;
+  // Pre-checks these scopes and starts in "Only these scopes" mode — used when editing an
+  // EXISTING connection's current grant, as opposed to picking scopes while creating a new one
+  // (which always starts from "All scopes").
+  initialScopes?: string[];
 }
 
 // Lets the caller pick between "All scopes" (the default — same behavior as before this
 // component existed) and "Only these scopes", backed by the target authorization server's own
 // scope catalog. onChange fires with undefined for "All scopes" and a non-empty array for a
 // specific selection — matching okta.ts's PotentialConnection.selectedScopes contract exactly.
-export default function ScopeSelector({ agentId, authServerOrn, onChange }: Props) {
+export default function ScopeSelector({ agentId, authServerOrn, onChange, initialScopes }: Props) {
   const [scopes, setScopes] = useState<ScopeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'all' | 'specific'>('all');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<'all' | 'specific'>(initialScopes && initialScopes.length > 0 ? 'specific' : 'all');
+  const [selected, setSelected] = useState<Set<string>>(new Set(initialScopes || []));
 
   useEffect(() => {
     const authServerId = authServerOrn.split(':').pop();

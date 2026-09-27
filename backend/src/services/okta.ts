@@ -1161,10 +1161,37 @@ export async function ensureAgentConnection(callerAgentId: string, targetOrn: st
   throw new Error(err.errorSummary || `ensureAgentConnection ${res.status}`);
 }
 
+// Okta rejects deleting an ACTIVE connection outright ("Cannot delete an active connection.
+// Please deactivate it first.", confirmed live) — deactivating first is a no-op if it's already
+// INACTIVE, so this can be called unconditionally before every delete.
+export async function deactivateAgentConnection(agentId: string, connectionId: string): Promise<void> {
+  const res = await sswsFetch(
+    `/workload-principals/api/v1/ai-agents/${agentId}/connections/${connectionId}/lifecycle/deactivate`,
+    { method: 'POST' }
+  );
+  if (!res.ok) throw new Error(`deactivateConnection ${res.status}: ${await res.text()}`);
+}
+
 export async function deleteAgentConnection(agentId: string, connectionId: string): Promise<void> {
+  await deactivateAgentConnection(agentId, connectionId);
   const res = await sswsFetch(
     `/workload-principals/api/v1/ai-agents/${agentId}/connections/${connectionId}`,
     { method: 'DELETE' }
   );
   if (res.status !== 204 && !res.ok) throw new Error(`deleteConnection ${res.status}`);
+}
+
+// Updates an existing Custom AS connection's scope grant in place — Okta rejects PUT on this
+// resource (405) but accepts a JSON-merge-patch PATCH (confirmed live), so an admin can widen or
+// narrow an agent's scopes without deleting and recreating the connection (which would also lose
+// its connection id / any audit trail tied to it).
+export async function updateAgentConnectionScopes(
+  agentId: string, connectionId: string, scopeCondition: 'ALL_SCOPES' | 'INCLUDE_ONLY', scopes: string[]
+): Promise<AgentConnection> {
+  const res = await sswsFetch(
+    `/workload-principals/api/v1/ai-agents/${agentId}/connections/${connectionId}`,
+    { method: 'PATCH', headers: { 'Content-Type': 'application/merge-patch+json' }, body: JSON.stringify({ scopeCondition, scopes }) }
+  );
+  if (!res.ok) throw new Error(`updateAgentConnectionScopes ${res.status}: ${await res.text()}`);
+  return res.json() as Promise<AgentConnection>;
 }

@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { Check, X, Plus, Shield, Server, Zap, Link2, Trash2, RefreshCw, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Check, X, Plus, Shield, Server, Zap, Link2, Trash2, RefreshCw, ChevronRight, ArrowLeft, Pencil } from 'lucide-react';
 import ScopeSelector from './ScopeSelector';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
@@ -126,6 +126,12 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
   // of adding immediately on click, like every other resource type does.
   const [pendingAuthServer, setPendingAuthServer] = useState<PotentialConnection | null>(null);
   const [pendingScopes, setPendingScopes] = useState<string[] | undefined>(undefined);
+  // Editing an EXISTING Custom AS connection's scopes (as opposed to picking scopes while
+  // creating a new one, above) — tracked separately since it operates on an AgentConnection
+  // (already has an id) rather than a not-yet-created PotentialConnection.
+  const [editingConnId, setEditingConnId] = useState<string | null>(null);
+  const [editingScopes, setEditingScopes] = useState<string[] | undefined>(undefined);
+  const [saving, setSaving] = useState<string | null>(null);
 
   const loadConnections = useCallback(async () => {
     setLoadingConnections(true);
@@ -217,6 +223,8 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
   }
 
   // ── Remove connection ──────────────────────────────────────────────────────
+  // The backend deactivates before deleting — Okta otherwise rejects deleting an ACTIVE
+  // connection outright — so this always succeeds instead of surfacing a 409.
   async function removeConnection(connId: string) {
     setRemoving(connId); setError('');
     try {
@@ -225,6 +233,23 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
       setConnections(prev => prev.filter(c => c.id !== connId));
     } catch (e: any) { setError(e.message); }
     setRemoving(null);
+  }
+
+  // ── Edit an existing connection's scopes ───────────────────────────────────
+  async function saveConnectionScopes(connId: string) {
+    setSaving(connId); setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/connections/${connId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selectedScopes: editingScopes }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Failed to update scopes'); setSaving(null); return; }
+      setConnections(prev => prev.map(c => c.id === connId ? data : c));
+      setEditingConnId(null);
+      setEditingScopes(undefined);
+    } catch (e: any) { setError(e.message); }
+    setSaving(null);
   }
 
   // ── Filtered potential connections for selected type ───────────────────────
@@ -279,29 +304,69 @@ export default function ResourcePicker({ agentId, onStatusChange }: Props) {
               const typeDef = RESOURCE_TYPES.find(t => (t.connectionTypes as readonly string[]).includes(c.connectionType));
               const Icon = typeDef?.icon || Shield;
               const colour = typeDef?.colour || '#64748b';
+              const isCustomAS = c.connectionType === 'IDENTITY_ASSERTION_CUSTOM_AS';
+              const isEditing = editingConnId === c.id;
+              const scopesSummary = c.scopeCondition === 'INCLUDE_ONLY' && c.scopes && c.scopes.length > 0
+                ? `${c.scopes.length} scope${c.scopes.length > 1 ? 's' : ''}: ${c.scopes.join(', ')}`
+                : 'All scopes';
               return (
-                <div key={c.id} className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${colour}1a` }}>
-                    <Icon className="w-4 h-4" style={{ color: colour }} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-[var(--text-primary)] truncate">{connectionName(c)}</div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-[var(--text-secondary)] truncate">{typeDef?.label || c.connectionType}</span>
-                      {connectionSub(c) && <span className="text-xs text-[var(--text-muted)] truncate">· {connectionSub(c)}</span>}
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
-                        c.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-[var(--bg-surface-muted)] text-[var(--text-secondary)]'
-                      }`}>{c.status}</span>
+                <div key={c.id}>
+                  <div className="flex items-center gap-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${colour}1a` }}>
+                      <Icon className="w-4 h-4" style={{ color: colour }} />
                     </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-[var(--text-primary)] truncate">{connectionName(c)}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-[var(--text-secondary)] truncate">{typeDef?.label || c.connectionType}</span>
+                        {connectionSub(c) && <span className="text-xs text-[var(--text-muted)] truncate">· {connectionSub(c)}</span>}
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+                          c.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-[var(--bg-surface-muted)] text-[var(--text-secondary)]'
+                        }`}>{c.status}</span>
+                      </div>
+                      {isCustomAS && (
+                        <div className="text-xs text-[var(--text-muted)] truncate mt-0.5" title={scopesSummary}>{scopesSummary}</div>
+                      )}
+                    </div>
+                    {isCustomAS && (
+                      <button
+                        onClick={() => {
+                          if (isEditing) { setEditingConnId(null); setEditingScopes(undefined); }
+                          else { setEditingConnId(c.id); setEditingScopes(c.scopeCondition === 'INCLUDE_ONLY' ? c.scopes : undefined); }
+                        }}
+                        className="text-[var(--text-muted)] hover:text-[#1662dd] transition-colors p-1 flex-shrink-0"
+                        title="Edit scopes"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => removeConnection(c.id)}
+                      disabled={removing === c.id}
+                      className="text-[var(--text-muted)] hover:text-red-600 transition-colors p-1 flex-shrink-0"
+                      title="Remove connection"
+                    >
+                      {removing === c.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
                   </div>
-                  <button
-                    onClick={() => removeConnection(c.id)}
-                    disabled={removing === c.id}
-                    className="text-[var(--text-muted)] hover:text-red-600 transition-colors p-1 flex-shrink-0"
-                    title="Remove connection"
-                  >
-                    {removing === c.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                  </button>
+                  {isEditing && c.authorizationServer?.orn && (
+                    <div className="mt-2 p-3 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg space-y-3">
+                      <ScopeSelector
+                        agentId={agentId}
+                        authServerOrn={c.authorizationServer.orn}
+                        initialScopes={c.scopeCondition === 'INCLUDE_ONLY' ? c.scopes : undefined}
+                        onChange={setEditingScopes}
+                      />
+                      <button
+                        onClick={() => saveConnectionScopes(c.id)}
+                        disabled={saving === c.id}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd] text-white rounded-lg hover:bg-[#1662dd]/90 transition-colors disabled:opacity-40"
+                      >
+                        {saving === c.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                        Save
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -107,7 +107,28 @@ router.post('/:id/connections', async (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/agents/:id/connections/:connId
+// PATCH /api/agents/:id/connections/:connId — update an existing Custom AS connection's scope
+// grant in place. Body: { selectedScopes?: string[] } — non-empty => INCLUDE_ONLY with those
+// scopes, absent/empty => ALL_SCOPES, matching the same contract POST /connections uses for
+// creation (see okta.ts's PotentialConnection.selectedScopes).
+router.patch('/:id/connections/:connId', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+
+    const selectedScopes: string[] | undefined = req.body?.selectedScopes;
+    const connection = selectedScopes && selectedScopes.length > 0
+      ? await okta.updateAgentConnectionScopes(agent.oktaAgentId, req.params.connId, 'INCLUDE_ONLY', selectedScopes)
+      : await okta.updateAgentConnectionScopes(agent.oktaAgentId, req.params.connId, 'ALL_SCOPES', ['*']);
+
+    res.json(connection);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/agents/:id/connections/:connId — deactivates the connection first (Okta rejects
+// deleting an ACTIVE one outright), so this always succeeds instead of surfacing a 409.
 router.delete('/:id/connections/:connId', async (req: Request, res: Response) => {
   try {
     const agent = await store.findAgentById(req.params.id);
