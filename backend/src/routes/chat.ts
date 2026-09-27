@@ -11,7 +11,20 @@ const router = Router();
 const ORG = () => process.env.OKTA_ORG_URL!;
 const BACKEND_PUBLIC_URL = () => process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
 const FRONTEND_URL = () => process.env.FRONTEND_URL || 'http://localhost:3000';
-const CAMPAIGNS_SCOPES = 'api.read api.search api.create api.update api.delete';
+
+// Lets a test session log in with either the full scope set or a deliberately narrowed one, so an
+// agent's behavior under reduced privilege can be exercised without touching its real Okta
+// connection — the scope choice rides through login → the XAA exchange, since login itself
+// (a plain OIDC code flow against the agent's own app) carries no scopes; only the id-jag exchange
+// that follows does.
+type ScopeMode = 'readonly' | 'full';
+const SCOPES_BY_MODE: Record<ScopeMode, string> = {
+  readonly: 'api.read api.search',
+  full: 'api.read api.search api.create api.update api.delete',
+};
+function isScopeMode(value: unknown): value is ScopeMode {
+  return value === 'readonly' || value === 'full';
+}
 
 // ── Per-agent login (User Access) ────────────────────────────────────────────
 // Chat's subject token has to be an id_token issued by the SELECTED AGENT'S OWN backing app —
@@ -21,9 +34,9 @@ const CAMPAIGNS_SCOPES = 'api.read api.search api.create api.update api.delete';
 // same reasoning as the Exercise page's real User Access flow in exercise.ts, whose pattern this
 // mirrors (separate in-memory maps here rather than importing exercise.ts's, since those are
 // private to that file's stepwise-click flow).
-const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; clientSecret: string; createdAt: number }>();
+const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; clientSecret: string; scopeMode: ScopeMode; createdAt: number }>();
 interface ChatSession {
-  agentId: string; idToken: string; createdAt: number;
+  agentId: string; idToken: string; scopeMode: ScopeMode; createdAt: number;
   campaignsAccessToken?: string; campaignsTokenExpiresAt?: number;
 }
 const chatSessions = new Map<string, ChatSession>();
@@ -95,9 +108,12 @@ router.get('/eligible-agents', async (_req: Request, res: Response) => {
   }
 });
 
-// POST /api/chat/:agentId/login/start
+// POST /api/chat/:agentId/login/start — body { scopeMode: 'readonly' | 'full' }
 router.post('/:agentId/login/start', async (req: Request, res: Response) => {
   try {
+    const scopeMode = req.body?.scopeMode;
+    if (!isScopeMode(scopeMode)) return res.status(400).json({ error: "scopeMode must be 'readonly' or 'full'" });
+
     const agent = await store.findAgentById(req.params.agentId);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
 
@@ -109,7 +125,7 @@ router.post('/:agentId/login/start', async (req: Request, res: Response) => {
     const codeVerifier = base64url(randomBytes(32));
     const codeChallenge = base64url(createHash('sha256').update(codeVerifier).digest());
     const state = randomUUID();
-    pendingLogins.set(state, { codeVerifier, agentId: agent.id, clientId, clientSecret, createdAt: Date.now() });
+    pendingLogins.set(state, { codeVerifier, agentId: agent.id, clientId, clientSecret, scopeMode, createdAt: Date.now() });
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -162,8 +178,8 @@ router.get('/login/callback', async (req: Request, res: Response) => {
 
     pruneExpired(chatSessions, 60 * 60 * 1000);
     const rid = randomUUID();
-    chatSessions.set(rid, { agentId: pending.agentId, idToken: body.id_token, createdAt: Date.now() });
-    res.redirect(`${FRONTEND_URL()}/chat?loginResult=${rid}&agentId=${pending.agentId}`);
+    chatSessions.set(rid, { agentId: pending.agentId, idToken: body.id_token, scopeMode: pending.scopeMode, createdAt: Date.now() });
+    res.redirect(`${FRONTEND_URL()}/chat?loginResult=${rid}&agentId=${pending.agentId}&scopeMode=${pending.scopeMode}`);
   } catch (e: any) {
     res.redirect(`${FRONTEND_URL()}/chat?loginError=${encodeURIComponent(e.message)}`);
   }
@@ -272,7 +288,7 @@ router.post('/:agentId/message', async (req: Request, res: Response) => {
 
       const exchange = await okta.runIdJagExchange(
         `${ORG()}/oauth2/v1/token`, agent.oktaAgentId, callerCred, subjectIdToken,
-        undefined, campaignsAS.issuer, 'urn:ietf:params:oauth:token-type:id_token', CAMPAIGNS_SCOPES
+        undefined, campaignsAS.issuer, 'urn:ietf:params:oauth:token-type:id_token', SCOPES_BY_MODE[session.scopeMode]
       );
       if (!exchange.ok || !exchange.accessToken) return res.status(400).json({ error: exchange.raw?.error_description || exchange.raw?.error || 'Token exchange failed', step: exchange });
 
