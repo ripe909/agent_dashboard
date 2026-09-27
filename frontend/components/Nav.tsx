@@ -3,7 +3,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
-import { Bot, Users, Puzzle, LayoutDashboard, LogOut, Settings, PlayCircle, Boxes } from 'lucide-react';
+import { Bot, Users, Puzzle, LayoutDashboard, LogOut, Settings, PlayCircle, Boxes, MessageSquare } from 'lucide-react';
 import clsx from 'clsx';
 import SettingsModal from './SettingsModal';
 import { portalConfig } from '@/lib/portalConfig';
@@ -14,6 +14,7 @@ const links = [
   { href: '/users', label: 'Users', icon: Users },
   { href: '/resources', label: 'Resources', icon: Puzzle },
   { href: '/exercise', label: 'Exercise', icon: PlayCircle },
+  { href: '/chat', label: 'Chat', icon: MessageSquare },
 ];
 
 interface Props {

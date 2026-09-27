@@ -1,0 +1,351 @@
+'use client';
+import { useState, useRef, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Send, RefreshCw, ChevronDown, ChevronRight, Bot, User, LogIn, Calendar, DollarSign } from 'lucide-react';
+import AgentPicker from '@/components/AgentPicker';
+
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+
+interface AgentOption { id: string; name: string; description?: string; }
+interface ToolCallRecord { name: string; args: any; result: any; }
+interface Message { role: 'user' | 'assistant'; content: string; toolCalls?: ToolCallRecord[]; }
+
+interface Campaign {
+  id: string;
+  name: string;
+  description?: string | null;
+  status?: string;
+  budget?: string | number | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+// Tool results come back as MCP content blocks — a JSON-stringified campaign (or array of them)
+// inside a single text block. Pulls out anything shaped like a campaign so it can render as a
+// card instead of raw JSON; skips delete_campaign's {deleted: id} result and anything else.
+function extractCampaigns(toolCalls?: ToolCallRecord[]): Campaign[] {
+  if (!toolCalls) return [];
+  const byId = new Map<string, Campaign>();
+  for (const tc of toolCalls) {
+    const text = tc.result?.content?.[0]?.text;
+    if (typeof text !== 'string') continue;
+    let parsed: any;
+    try { parsed = JSON.parse(text); } catch { continue; }
+    const candidates = Array.isArray(parsed) ? parsed : [parsed];
+    for (const c of candidates) {
+      if (c && typeof c === 'object' && typeof c.id === 'string' && typeof c.name === 'string') {
+        byId.set(c.id, c);
+      }
+    }
+  }
+  return Array.from(byId.values());
+}
+
+// loginRid -> which agent it's valid for, kept in sessionStorage so a page reload (or the full
+// navigation the Okta login redirect causes) doesn't lose it — the id_token itself never reaches
+// the browser at all, only this opaque rid the backend keeps mapped to it.
+function storeLoginRid(agentId: string, rid: string) {
+  sessionStorage.setItem(`chat-login:${agentId}`, rid);
+}
+function getLoginRid(agentId: string): string | null {
+  return sessionStorage.getItem(`chat-login:${agentId}`);
+}
+
+export default function ChatClient({ agents }: { agents: AgentOption[] }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [selectedAgent, setSelectedAgent] = useState<AgentOption | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [loginRid, setLoginRid] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages]);
+
+  // Resume after the Okta login redirect lands back here — a full page navigation, so in-memory
+  // state doesn't survive it; the agent selection and rid round-trip through the URL/sessionStorage.
+  useEffect(() => {
+    const result = searchParams.get('loginResult');
+    const err = searchParams.get('loginError');
+    const agentId = searchParams.get('agentId');
+    if (err) { setError(err); router.replace('/chat'); return; }
+    if (!result || !agentId) return;
+    const agent = agents.find((a) => a.id === agentId);
+    if (agent) {
+      storeLoginRid(agentId, result);
+      setSelectedAgent(agent);
+      setLoginRid(result);
+      setError('');
+    }
+    router.replace('/chat');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  function selectAgent(agent: AgentOption) {
+    setSelectedAgent(agent);
+    setPickerOpen(false);
+    setMessages([]);
+    setError('');
+    setLoginRid(getLoginRid(agent.id));
+  }
+
+  async function login() {
+    if (!selectedAgent) return;
+    setLoggingIn(true);
+    setError('');
+    try {
+      const res = await fetch(`${BACKEND}/api/chat/${selectedAgent.id}/login/start`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.authorizeUrl) throw new Error(data.error || 'Failed to start login');
+      window.location.href = data.authorizeUrl;
+    } catch (e: any) {
+      setError(e.message);
+      setLoggingIn(false);
+    }
+  }
+
+  async function sendMessage() {
+    if (!input.trim() || !selectedAgent || !loginRid || sending) return;
+    const userMessage: Message = { role: 'user', content: input.trim() };
+    const history = messages.map((m) => ({ role: m.role, content: m.content }));
+    setMessages((prev) => [...prev, userMessage]);
+    setInput('');
+    setSending(true);
+    setError('');
+
+    try {
+      const res = await fetch(`${BACKEND}/api/chat/${selectedAgent.id}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginRid, message: userMessage.content, history }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.requiresLogin) setLoginRid(null);
+        throw new Error(data.error || 'Chat request failed');
+      }
+      setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, toolCalls: data.toolCalls }]);
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setSending(false);
+  }
+
+  return (
+    <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl overflow-hidden flex flex-col" style={{ height: 600 }}>
+      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)]">
+        <div className="w-64 relative">
+          {!pickerOpen && selectedAgent ? (
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="w-full text-left text-sm font-semibold text-[var(--text-primary)] px-2 py-1.5 rounded-lg hover:bg-[var(--bg-surface-muted)] transition-colors truncate"
+            >
+              {selectedAgent.name}
+            </button>
+          ) : (
+            <AgentPicker excludeAgentId="" onSelect={selectAgent} />
+          )}
+        </div>
+        {selectedAgent && !loginRid && (
+          <button
+            onClick={login}
+            disabled={loggingIn}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40"
+          >
+            {loggingIn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+            Log in as {selectedAgent.name}
+          </button>
+        )}
+        {sending && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
+      </div>
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+        {!selectedAgent ? (
+          <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
+            Select an agent above to start chatting
+          </div>
+        ) : !loginRid ? (
+          <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
+            Log in as {selectedAgent.name} to start chatting
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
+            Ask {selectedAgent.name} to create, search, read, update, or delete a marketing campaign
+          </div>
+        ) : (
+          messages.map((m, i) => <MessageBubble key={i} message={m} />)
+        )}
+      </div>
+
+      {error && <div className="px-4 py-2 text-xs text-red-600 bg-red-50 border-t border-red-200">{error}</div>}
+
+      <div className="p-3 border-t border-[var(--border-default)] flex items-center gap-2">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+          disabled={!selectedAgent || !loginRid || sending}
+          placeholder={!selectedAgent ? 'Select an agent first' : !loginRid ? 'Log in first' : 'Type a message…'}
+          className="flex-1 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[#1662dd]/40 disabled:opacity-50"
+        />
+        <button
+          onClick={sendMessage}
+          disabled={!selectedAgent || !loginRid || !input.trim() || sending}
+          className="p-2 bg-[#1662dd] text-white rounded-lg hover:bg-[#1662dd]/90 transition-colors disabled:opacity-40"
+        >
+          <Send className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ message }: { message: Message }) {
+  const [expanded, setExpanded] = useState(false);
+  const isUser = message.role === 'user';
+  const campaigns = isUser ? [] : extractCampaigns(message.toolCalls);
+  return (
+    <div className={`flex gap-2.5 ${isUser ? 'justify-end' : 'justify-start'}`}>
+      {!isUser && (
+        <div className="w-7 h-7 rounded-full bg-[#1662dd]/15 flex items-center justify-center flex-shrink-0">
+          <Bot className="w-3.5 h-3.5 text-[#1662dd]" />
+        </div>
+      )}
+      <div className={`max-w-[75%] ${isUser ? 'order-1' : ''}`}>
+        <div
+          className={`rounded-xl px-3.5 py-2.5 text-sm whitespace-pre-wrap ${
+            isUser ? 'bg-[#1662dd] text-white' : 'bg-[var(--bg-surface-muted)] text-[var(--text-primary)] border border-[var(--border-default)]'
+          }`}
+        >
+          {message.content}
+        </div>
+        {campaigns.length > 0 && (
+          <div className="mt-2 space-y-2">
+            {campaigns.map((c) => <CampaignCard key={c.id} campaign={c} />)}
+          </div>
+        )}
+        {message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mt-1.5">
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              {message.toolCalls.length} tool call{message.toolCalls.length > 1 ? 's' : ''}
+            </button>
+            {expanded && (
+              <div className="mt-1.5 space-y-1.5">
+                {message.toolCalls.map((tc, i) => (
+                  <div key={i} className="bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg p-2">
+                    <div className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wide mb-1">{tc.name}</div>
+                    <pre className="text-[11px] text-[var(--text-primary)] overflow-x-auto whitespace-pre-wrap break-all font-mono leading-relaxed max-h-40">
+                      {JSON.stringify({ args: tc.args, result: tc.result }, null, 2)}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      {isUser && (
+        <div className="w-7 h-7 rounded-full bg-[var(--bg-surface-muted)] border border-[var(--border-default)] flex items-center justify-center flex-shrink-0">
+          <User className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const STATUS_STYLES: Record<string, string> = {
+  active: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  draft: 'bg-[var(--bg-surface-muted)] text-[var(--text-secondary)] border-[var(--border-default)]',
+  paused: 'bg-amber-50 text-amber-700 border-amber-200',
+  completed: 'bg-[#1662dd]/10 text-[#1662dd] border-[#1662dd]/25',
+};
+
+// A stable per-campaign color, derived from its id (not the name — a rename shouldn't shuffle
+// the logo) — there's no real logo/image asset for campaigns, so this "logo" is a colored
+// initials avatar, deterministic so the same campaign always looks the same across cards.
+const LOGO_COLORS = [
+  { bg: 'bg-[#1662dd]/15', text: 'text-[#1662dd]' },
+  { bg: 'bg-emerald-500/15', text: 'text-emerald-600' },
+  { bg: 'bg-amber-500/15', text: 'text-amber-600' },
+  { bg: 'bg-rose-500/15', text: 'text-rose-600' },
+  { bg: 'bg-violet-500/15', text: 'text-violet-600' },
+  { bg: 'bg-cyan-500/15', text: 'text-cyan-600' },
+];
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  return hash;
+}
+
+function campaignInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+function CampaignLogo({ campaign }: { campaign: Campaign }) {
+  const color = LOGO_COLORS[hashString(campaign.id) % LOGO_COLORS.length];
+  return (
+    <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${color.bg}`}>
+      <span className={`text-[10px] font-bold ${color.text}`}>{campaignInitials(campaign.name)}</span>
+    </div>
+  );
+}
+
+function formatDate(value?: string | null): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? value : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function CampaignCard({ campaign }: { campaign: Campaign }) {
+  const statusClass = STATUS_STYLES[campaign.status?.toLowerCase() || ''] || STATUS_STYLES.draft;
+  const start = formatDate(campaign.startDate);
+  const end = formatDate(campaign.endDate);
+  const budget = campaign.budget != null && campaign.budget !== '' ? Number(campaign.budget) : null;
+
+  return (
+    <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg p-3 max-w-sm">
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <CampaignLogo campaign={campaign} />
+          <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{campaign.name}</div>
+        </div>
+        {campaign.status && (
+          <span className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border flex-shrink-0 ${statusClass}`}>
+            {campaign.status}
+          </span>
+        )}
+      </div>
+      {campaign.description && (
+        <div className="text-xs text-[var(--text-secondary)] mb-2">{campaign.description}</div>
+      )}
+      {(budget != null || start || end) && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[var(--text-secondary)]">
+          {budget != null && (
+            <span className="flex items-center gap-1">
+              <DollarSign className="w-3 h-3" /> {budget.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+          )}
+          {(start || end) && (
+            <span className="flex items-center gap-1">
+              <Calendar className="w-3 h-3" /> {start || '?'} – {end || '?'}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -632,7 +632,8 @@ export async function runServiceClientGrant(
 // the AS and its own configured resource/audience is what's actually being asserted.
 export async function runIdJagExchange(
   orgTokenEndpoint: string, callerAgentId: string, callerCred: AgentTestCredential, subjectToken: string, resource: string | undefined, audience: string,
-  subjectTokenType: string = 'urn:ietf:params:oauth:token-type:access_token'
+  subjectTokenType: string = 'urn:ietf:params:oauth:token-type:access_token',
+  scope: string = 'agent.invoke'
 ): Promise<ExerciseTokenResult> {
   const params: Record<string, string> = {
     grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
@@ -640,7 +641,7 @@ export async function runIdJagExchange(
     subject_token_type: subjectTokenType,
     requested_token_type: 'urn:ietf:params:oauth:token-type:id-jag',
     audience,
-    scope: 'agent.invoke',
+    scope,
   };
   if (resource) params.resource = resource;
   return postToken(orgTokenEndpoint, callerAgentId, callerCred, params, 'Exercise: Token Exchange (id-jag)');

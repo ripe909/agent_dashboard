@@ -11,6 +11,7 @@ interface Settings {
   sharedAuthorizationServerId: string | null;
   serviceClientId: string | null;
   serviceClientSecret: string | null;
+  campaignsAuthorizationServerId: string | null;
 }
 interface AuthServer { id: string; name: string; }
 
@@ -137,6 +138,24 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
               <select
                 value={settings.sharedAuthorizationServerId || ''}
                 onChange={(e) => save({ sharedAuthorizationServerId: e.target.value || null })}
+                disabled={saving}
+                className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[#1662dd]/40"
+              >
+                <option value="">Not configured</option>
+                {authServers.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="p-3 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-muted)]">
+              <div className="text-sm font-semibold text-[var(--text-primary)] mb-1">Campaigns Authorization Server</div>
+              <div className="text-xs text-[var(--text-secondary)] mb-2">
+                The Custom Authorization Server behind the embedded Campaigns MCP server, used by the Chat feature.
+              </div>
+              <select
+                value={settings.campaignsAuthorizationServerId || ''}
+                onChange={(e) => save({ campaignsAuthorizationServerId: e.target.value || null })}
                 disabled={saving}
                 className="w-full bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[#1662dd]/40"
               >

@@ -1,9 +1,9 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { eq } from 'drizzle-orm';
+import { eq, ilike, or } from 'drizzle-orm';
 import * as schema from './schema';
-import { agents, agentResources, resources, Agent, Resource } from './schema';
-import { Store, AgentPatch, NewAgent, AppSettings, DEFAULT_SETTINGS } from './store';
+import { agents, agentResources, resources, campaigns, Agent, Resource, Campaign } from './schema';
+import { Store, AgentPatch, NewAgent, AppSettings, DEFAULT_SETTINGS, NewCampaign, CampaignPatch } from './store';
 
 const dbUrl = process.env.DATABASE_URL || '';
 // Hosted Postgres providers generally require SSL; local dev doesn't.
@@ -81,6 +81,17 @@ async function migrate() {
       id INTEGER PRIMARY KEY DEFAULT 1,
       data JSONB NOT NULL,
       CONSTRAINT settings_single_row CHECK (id = 1)
+    );
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      budget NUMERIC,
+      start_date TIMESTAMPTZ,
+      end_date TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
 }
@@ -174,6 +185,34 @@ export class PostgresStore implements Store {
 
   async listResources(): Promise<Resource[]> {
     return withRetry(() => db.select().from(resources));
+  }
+
+  async listCampaigns(): Promise<Campaign[]> {
+    return withRetry(() => db.select().from(campaigns));
+  }
+
+  async searchCampaigns(query: string): Promise<Campaign[]> {
+    const pattern = `%${query}%`;
+    return withRetry(() => db.select().from(campaigns).where(or(ilike(campaigns.name, pattern), ilike(campaigns.description, pattern))));
+  }
+
+  async findCampaignById(id: string): Promise<Campaign | undefined> {
+    const rows = await withRetry(() => db.select().from(campaigns).where(eq(campaigns.id, id)));
+    return rows[0];
+  }
+
+  async insertCampaign(data: NewCampaign): Promise<Campaign> {
+    const [c] = await withRetry(() => db.insert(campaigns).values(data).returning());
+    return c;
+  }
+
+  async updateCampaignById(id: string, patch: CampaignPatch): Promise<Campaign | undefined> {
+    const [c] = await withRetry(() => db.update(campaigns).set({ ...patch, updatedAt: new Date() }).where(eq(campaigns.id, id)).returning());
+    return c;
+  }
+
+  async deleteCampaignById(id: string): Promise<void> {
+    await withRetry(() => db.delete(campaigns).where(eq(campaigns.id, id)));
   }
 
   async getSettings(): Promise<AppSettings> {

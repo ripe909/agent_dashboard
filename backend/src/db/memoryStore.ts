@@ -1,12 +1,13 @@
 import { randomUUID } from 'crypto';
-import { Agent, Resource } from './schema';
-import { Store, AgentPatch, NewAgent, AppSettings, DEFAULT_SETTINGS } from './store';
+import { Agent, Resource, Campaign } from './schema';
+import { Store, AgentPatch, NewAgent, AppSettings, DEFAULT_SETTINGS, NewCampaign, CampaignPatch } from './store';
 import { DEFAULT_RESOURCES } from './postgresStore';
 
 export class MemoryStore implements Store {
   private agentsById = new Map<string, Agent>();
   private resourcesById = new Map<string, Resource>();
   private agentResourceIds = new Map<string, Set<string>>();
+  private campaignsById = new Map<string, Campaign>();
   private settings: AppSettings = { ...DEFAULT_SETTINGS };
 
   async listAgents(): Promise<Agent[]> {
@@ -75,6 +76,48 @@ export class MemoryStore implements Store {
 
   async listResources(): Promise<Resource[]> {
     return [...this.resourcesById.values()];
+  }
+
+  async listCampaigns(): Promise<Campaign[]> {
+    return [...this.campaignsById.values()];
+  }
+
+  async searchCampaigns(query: string): Promise<Campaign[]> {
+    const q = query.toLowerCase();
+    return [...this.campaignsById.values()].filter((c) => c.name.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q));
+  }
+
+  async findCampaignById(id: string): Promise<Campaign | undefined> {
+    return this.campaignsById.get(id);
+  }
+
+  async insertCampaign(data: NewCampaign): Promise<Campaign> {
+    const now = new Date();
+    const campaign: Campaign = {
+      id: randomUUID(),
+      name: data.name,
+      description: data.description ?? null,
+      status: data.status ?? 'draft',
+      budget: data.budget ?? null,
+      startDate: data.startDate ?? null,
+      endDate: data.endDate ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.campaignsById.set(campaign.id, campaign);
+    return campaign;
+  }
+
+  async updateCampaignById(id: string, patch: CampaignPatch): Promise<Campaign | undefined> {
+    const existing = this.campaignsById.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...patch, updatedAt: new Date() };
+    this.campaignsById.set(id, updated);
+    return updated;
+  }
+
+  async deleteCampaignById(id: string): Promise<void> {
+    this.campaignsById.delete(id);
   }
 
   async getSettings(): Promise<AppSettings> {

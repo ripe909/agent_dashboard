@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, jsonb, primaryKey, numeric } from 'drizzle-orm/pg-core';
 
 export const agents = pgTable('agents', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -37,5 +37,18 @@ export const agentResources = pgTable(
   (t) => ({ pk: primaryKey({ columns: [t.agentId, t.resourceId] }) })
 );
 
+export const campaigns = pgTable('campaigns', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  description: text('description'),
+  status: text('status').default('draft').notNull(),
+  budget: numeric('budget'),
+  startDate: timestamp('start_date'),
+  endDate: timestamp('end_date'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export type Agent = typeof agents.$inferSelect;
 export type Resource = typeof resources.$inferSelect;
+export type Campaign = typeof campaigns.$inferSelect;
