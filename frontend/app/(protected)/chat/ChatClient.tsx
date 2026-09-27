@@ -152,17 +152,19 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
             <AgentPicker excludeAgentId="" onSelect={selectAgent} />
           )}
         </div>
-        {selectedAgent && !loginRid && (
-          <button
-            onClick={login}
-            disabled={loggingIn}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40"
-          >
-            {loggingIn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
-            Log in as {selectedAgent.name}
-          </button>
-        )}
-        {sending && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
+        <div className="ml-auto flex items-center gap-3">
+          {selectedAgent && !loginRid && (
+            <button
+              onClick={login}
+              disabled={loggingIn}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40"
+            >
+              {loggingIn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+              Log in as {selectedAgent.name}
+            </button>
+          )}
+          {sending && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
