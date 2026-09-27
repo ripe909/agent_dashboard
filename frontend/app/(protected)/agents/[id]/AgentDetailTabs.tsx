@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Check, AlertTriangle, Circle } from 'lucide-react';
 import UserPicker from '@/components/UserPicker';
 import ResourcePicker from '@/components/ResourcePicker';
@@ -7,6 +7,8 @@ import SyncOwnersButton from '@/components/SyncOwnersButton';
 import AgentCredentials from './AgentCredentials';
 import UserAccess from './UserAccess';
 import MachineAccess from './MachineAccess';
+
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
 type TabId = 'profile' | 'owners' | 'registration' | 'user_access' | 'machine_access' | 'connections';
 
@@ -38,7 +40,19 @@ export default function AgentDetailTabs({ agent, currentOwner, streamlinedUserAc
   const [hasOwner, setHasOwner] = useState(!!currentOwner);
   const [hasUserAccess, setHasUserAccess] = useState(!!agent.userAccessEnabled);
   const [hasMachineAccess, setHasMachineAccess] = useState(!!agent.resourceUrl);
-  const [hasConnections, setHasConnections] = useState((agent.resources?.length || 0) > 0);
+  // agent.resources comes from a local DB table that's disconnected from real Okta connections
+  // (nothing writes to it for Custom AS/A2A/etc connections) — it's always empty, so it can't be
+  // used to seed this. Instead, fetch the REAL connection count once on mount regardless of which
+  // tab is active, matching what ResourcePicker itself would show once its tab is opened.
+  const [hasConnections, setHasConnections] = useState(false);
+
+  useEffect(() => {
+    fetch(`${BACKEND}/api/agents/${agent.id}/connections`)
+      .then((r) => r.json())
+      .then((d) => setHasConnections(Array.isArray(d) && d.length > 0))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent.id]);
 
   const tabs: { id: TabId; label: string; complete: 'check' | 'warn' | 'empty' }[] = [
     { id: 'profile', label: 'Profile', complete: 'check' },
