@@ -12,7 +12,7 @@ export default function OriginNode({ data }: NodeProps & { data: OriginNodeData 
   return (
     <div
       onClick={data.onSelect}
-      className={`relative w-48 rounded-lg border border-dashed bg-[var(--bg-surface-muted)] px-3 py-2.5 shadow-sm cursor-pointer transition-colors ${
+      className={`relative w-48 rounded-lg border border-dashed bg-[var(--bg-surface)] px-3 py-2.5 shadow-sm cursor-pointer transition-colors ${
         data.selected ? 'border-[#1662dd] ring-2 ring-[#1662dd]/30' : 'border-[var(--border-default)] hover:border-[#1662dd]/40'
       }`}
     >
