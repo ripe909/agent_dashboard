@@ -17,6 +17,10 @@ export interface ResourceNodeData {
   kind: 'resource'; connectionId: string; name: string;
   resourceTypeId: 'auth_server' | 'secret' | 'service_account' | 'application' | 'mcp_server';
   sub?: string; scopeCount?: number;
+  // The authorization server's own Okta id (not the connection's id) — needed to fetch its real
+  // scope catalog for the graph's per-node scope checklist. Parsed from authorizationServer.orn
+  // the same way components/ScopeSelector.tsx already does.
+  authServerId?: string;
 }
 // User Access has no distinct app-caller identity in this codebase's model (it's the agent's own
 // backing OIDC client, not a delegation-link caller) so it still needs a synthetic origin node —
@@ -133,6 +137,7 @@ export async function fetchNeighbors(dashboardAgentId: string, agents: AgentOpti
           kind: 'resource', connectionId: c.id, name: connectionName(c), resourceTypeId,
           sub: c.authorizationServer?.name && resourceTypeId !== 'auth_server' ? `via ${c.authorizationServer.name}` : undefined,
           scopeCount: Array.isArray(c.scopes) && !c.scopes.includes('*') ? c.scopes.length : undefined,
+          authServerId: c.authorizationServer?.orn?.split(':').pop(),
         },
       });
       const label = c.scopes && Array.isArray(c.scopes) && !c.scopes.includes('*') ? `${c.scopes.length} scopes` : undefined;

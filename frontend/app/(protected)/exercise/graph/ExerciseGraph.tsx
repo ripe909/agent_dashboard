@@ -26,6 +26,13 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 const NODE_TYPES = { agent: AgentNode, app: AppNode, resource: ResourceNode, origin: OriginNode };
 const NODE_WIDTH = 224;
 const NODE_HEIGHT = 56;
+// Auth-server resource nodes render an inline scope checklist below their label — reserve extra
+// vertical space for them in dagre's layout so they never visually overlap a sibling in the same rank.
+const AUTH_SERVER_NODE_HEIGHT = 140;
+
+function nodeHeight(n: GraphNode): number {
+  return n.data.kind === 'resource' && n.data.resourceTypeId === 'auth_server' ? AUTH_SERVER_NODE_HEIGHT : NODE_HEIGHT;
+}
 
 interface LayoutedNode { id: string; type: string; position: { x: number; y: number }; data: GraphNodeData; }
 
@@ -33,12 +40,12 @@ function layout(nodes: GraphNode[], edges: GraphEdge[]): LayoutedNode[] {
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: 'LR', nodesep: 32, ranksep: 96 });
   g.setDefaultEdgeLabel(() => ({}));
-  for (const n of nodes) g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  for (const n of nodes) g.setNode(n.id, { width: NODE_WIDTH, height: nodeHeight(n) });
   for (const e of edges) g.setEdge(e.source, e.target);
   dagre.layout(g);
   return nodes.map((n) => {
     const pos = g.node(n.id);
-    return { id: n.id, type: n.data.kind, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 }, data: n.data };
+    return { id: n.id, type: n.data.kind, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - nodeHeight(n) / 2 }, data: n.data };
   });
 }
 
@@ -57,6 +64,9 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [expandingId, setExpandingId] = useState<string | null>(null);
   const [loadingInitial, setLoadingInitial] = useState(false);
+  // Which scopes are currently checked on each auth-server resource node's own scope checklist —
+  // keyed by graph node id so different auth-server nodes in the same graph track independently.
+  const [selectedScopesByNodeId, setSelectedScopesByNodeId] = useState<Record<string, string[]>>({});
   const seenNodeIds = useRef<Set<string>>(new Set());
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -100,12 +110,16 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
   // there's no ambiguity about where it's headed. 0 or 2+ edges means the click does nothing
   // (0: nothing to expand into; 2+: not implemented — would need disambiguation). Same explicit-
   // override reasoning as resolveHopTarget above.
+  // Authorization Server targets are deliberately excluded from auto-chaining — reaching one
+  // always requires clicking it directly, which is the only place the scope checklist lives, so
+  // the user gets a real chance to pick real scopes before the exchange fires.
   function soleDownstream(
     nodeId: string, edges: GraphEdge[] = rawEdges, nodes: GraphNode[] = rawNodes
   ): { nodeId: string; kind: 'agent' | 'authserver'; id: string; label: string } | null {
     const outgoing = edges.filter((e) => e.source === nodeId);
     if (outgoing.length !== 1) return null;
     const target = resolveHopTarget(outgoing[0].target, nodes);
+    if (target?.kind === 'authserver') return null;
     return target ? { nodeId: outgoing[0].target, ...target } : null;
   }
 
@@ -249,6 +263,7 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
     setNodes(
       layoutedNodes.map((n) => {
         const isAgent = n.data.kind === 'agent';
+        const isAuthServer = n.data.kind === 'resource' && n.data.resourceTypeId === 'auth_server';
         const selected = n.id === runner.currentNodeId;
         return {
           ...n,
@@ -259,6 +274,11 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
             hops: hopByNodeId.get(n.id),
             onInspect: inspectToken,
             ...(isAgent ? { expanded: expandedIds.has(n.id), expanding: expandingId === n.id, onExpand: () => expandAgent((n.data as AgentNodeData).dashboardId, n.id) } : {}),
+            ...(isAuthServer ? {
+              agentId: centerAgentId,
+              selectedScopes: selectedScopesByNodeId[n.id] || [],
+              onScopesChange: (scopes: string[]) => setSelectedScopesByNodeId((prev) => ({ ...prev, [n.id]: scopes })),
+            } : {}),
           },
         };
       })
@@ -276,7 +296,7 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
       })
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutedNodes, rawEdges, expandedIds, expandingId, runner.currentNodeId, hopByNodeId, highlightSources, traveledEdgeIds]);
+  }, [layoutedNodes, rawEdges, expandedIds, expandingId, runner.currentNodeId, hopByNodeId, highlightSources, traveledEdgeIds, selectedScopesByNodeId, centerAgentId]);
 
   // Click model (4 clicks for a 3-hop chain — service app, EC10, ET10, authz server):
   // 1. Click the "start here" node (app/origin) → gets the initial token, lands on the first agent.
@@ -328,7 +348,8 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
       if (isDirectNeighbor) {
         const target = resolveHopTarget(n.id);
         if (target) {
-          const pending = await runner.runExchange(target.kind, target.id, n.id, target.label);
+          const scope = target.kind === 'authserver' ? (selectedScopesByNodeId[n.id] || []).join(' ') || undefined : undefined;
+          const pending = await runner.runExchange(target.kind, target.id, n.id, target.label, undefined, scope);
           if (pending) await runner.runRedeem(pending);
         }
         return;

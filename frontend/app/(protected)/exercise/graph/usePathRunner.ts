@@ -121,14 +121,14 @@ export function usePathRunner() {
   // that node's exchange in the same click, before React has re-rendered with the new state.
   async function runExchange(
     kind: 'agent' | 'authserver', targetId: string, targetNodeId: string, targetLabel: string,
-    overrides?: { rid: string; callerNodeId: string }
+    overrides?: { rid: string; callerNodeId: string }, scope?: string
   ): Promise<PendingExchange | null> {
     const effectiveRid = overrides?.rid ?? rid;
     const effectiveCallerNodeId = overrides?.callerNodeId ?? currentNodeId;
     if (!effectiveRid || !effectiveCallerNodeId) return null;
     setRunning(true); setError('');
     try {
-      const body = kind === 'agent' ? { rid: effectiveRid, targetAgentId: targetId } : { rid: effectiveRid, connectionId: targetId };
+      const body = kind === 'agent' ? { rid: effectiveRid, targetAgentId: targetId } : { rid: effectiveRid, connectionId: targetId, scope };
       const res = await fetch(`${BACKEND}/api/exercise/agents/exercise/exchange`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });

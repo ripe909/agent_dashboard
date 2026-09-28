@@ -211,7 +211,7 @@ const pendingExchanges = new Map<string, PendingExchange>();
 // delegation-link/connection resolution as /continue and /continue-to-authserver above — and
 // stashes the resulting id-jag for a later /redeem call instead of redeeming it immediately.
 router.post('/agents/exercise/exchange', async (req: Request, res: Response) => {
-  const { rid, targetAgentId, connectionId } = req.body;
+  const { rid, targetAgentId, connectionId, scope } = req.body;
   if (!rid || (!targetAgentId && !connectionId)) {
     return res.status(400).json({ error: 'rid and either targetAgentId or connectionId are required' });
   }
@@ -271,9 +271,13 @@ router.post('/agents/exercise/exchange', async (req: Request, res: Response) => 
       authServerTokenEndpoint = `${connection.authorizationServer.issuerUrl}/v1/token`;
       kind = 'authserver';
       // Unlike the a2a case, a Custom AS exchange must NOT send `resource` — see /continue-to-authserver.
+      // scope comes from the graph's per-node scope checklist (the AS's own real scope catalog) —
+      // not every Custom AS defines 'agent.invoke' (e.g. MARKETING MCP only has api.read/etc), so
+      // the old hardcoded default broke any chain ending there. Falls back to runIdJagExchange's
+      // own 'agent.invoke' default when omitted, preserving existing chains unaffected.
       step2 = await okta.runIdJagExchange(
         orgTokenEndpoint, caller.oktaAgentId, callerCred, result.rawToken,
-        undefined, connection.authorizationServer.issuerUrl, result.rawTokenType
+        undefined, connection.authorizationServer.issuerUrl, result.rawTokenType, scope || undefined
       );
     }
 
