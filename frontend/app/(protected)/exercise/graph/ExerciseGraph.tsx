@@ -7,7 +7,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
-import { RefreshCw, Maximize2 } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import AgentPicker from '@/components/AgentPicker';
 import type { TokenResult } from '@/components/TokenStepCard';
 import TokenInspectorPanel, { type TokenInspectorTarget } from '@/components/TokenInspectorPanel';
@@ -203,15 +203,7 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
     }
   }
 
-  async function expandAll() {
-    const agentNodes = rawNodes.filter((n) => n.data.kind === 'agent' && !expandedIds.has(n.id));
-    for (const n of agentNodes) {
-      const data = n.data as AgentNodeData;
-      await expandAgent(data.dashboardId, n.id);
-    }
-  }
-
-  // Resume a User Access path after the real Okta login redirect lands back here — the redirect
+// Resume a User Access path after the real Okta login redirect lands back here — the redirect
   // is a full page navigation, so in-memory path state can't survive it; agentId round-trips
   // through the backend's result payload the same way UserAccessExercise.tsx already relies on.
   useEffect(() => {
@@ -384,14 +376,6 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
             <AgentPickerInline agents={agents} value={centerAgentId} onSelect={loadCenter} />
           </div>
           {loadingInitial && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
-          {centerAgentId && (
-            <button
-              onClick={expandAll}
-              className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-            >
-              <Maximize2 className="w-3.5 h-3.5" /> Expand all
-            </button>
-          )}
         </div>
         <div style={{ height: 'calc(100% - 45px)' }}>
           {centerAgentId ? (
