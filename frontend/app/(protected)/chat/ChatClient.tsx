@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Send, RefreshCw, ChevronDown, ChevronRight, Bot, User, LogIn, Calendar, DollarSign } from 'lucide-react';
-import AgentPicker from '@/components/AgentPicker';
+import AgentCombobox from '@/components/AgentCombobox';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
@@ -60,7 +60,6 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [selectedAgent, setSelectedAgent] = useState<AgentOption | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
   // Which scope-mode session is currently active in the chat window, and the rid backing it.
   const [activeMode, setActiveMode] = useState<ScopeMode | null>(null);
   const [loginRid, setLoginRid] = useState<string | null>(null);
@@ -123,7 +122,6 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
 
   async function selectAgent(agent: AgentOption) {
     setSelectedAgent(agent);
-    setPickerOpen(false);
     setMessages([]);
     setError('');
     // Prefer a full-access session if one already exists, else read-only, else none — either way
@@ -201,24 +199,15 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
   }
 
   return (
-    <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl overflow-hidden flex flex-col" style={{ height: 600 }}>
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)]">
-        <div className="w-64 relative">
-          {!pickerOpen && selectedAgent ? (
-            <button
-              onClick={() => setPickerOpen(true)}
-              className="w-full text-left text-sm font-semibold text-[var(--text-primary)] px-2 py-1.5 rounded-lg hover:bg-[var(--bg-surface-muted)] transition-colors truncate"
-            >
-              {selectedAgent.name}
-            </button>
-          ) : (
-            <AgentPicker
-              excludeAgentId=""
-              onSelect={selectAgent}
-              endpoint="/api/chat/eligible-agents"
-              emptyMessage="No agents are connected to the Campaigns authorization server yet"
-            />
-          )}
+    <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl flex flex-col" style={{ height: 600 }}>
+      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)] rounded-t-xl">
+        <div className="w-64">
+          <AgentCombobox
+            agents={agents}
+            value={selectedAgent?.id || ''}
+            onSelect={selectAgent}
+            emptyMessage="No agents are connected to the Campaigns authorization server yet"
+          />
         </div>
         <div className="ml-auto flex items-center gap-2">
           {selectedAgent && (['readonly', 'full'] as const).map((mode) => {
@@ -265,7 +254,7 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
 
       {error && <div className="px-4 py-2 text-xs text-red-600 bg-red-50 border-t border-red-200">{error}</div>}
 
-      <div className="p-3 border-t border-[var(--border-default)] flex items-center gap-2">
+      <div className="p-3 border-t border-[var(--border-default)] flex items-center gap-2 rounded-b-xl">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}

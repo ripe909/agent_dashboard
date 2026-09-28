@@ -8,7 +8,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
 import { RefreshCw } from 'lucide-react';
-import AgentPicker from '@/components/AgentPicker';
+import AgentCombobox from '@/components/AgentCombobox';
 import type { TokenResult } from '@/components/TokenStepCard';
 import TokenInspectorPanel, { type TokenInspectorTarget } from '@/components/TokenInspectorPanel';
 import {
@@ -370,14 +370,14 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl overflow-hidden" style={{ height: 560 }}>
-        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)]">
+      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl" style={{ height: 560 }}>
+        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)] rounded-t-xl">
           <div className="w-64">
-            <AgentPickerInline agents={agents} value={centerAgentId} onSelect={loadCenter} />
+            <AgentCombobox agents={agents} value={centerAgentId} onSelect={(a) => loadCenter(a.id)} />
           </div>
           {loadingInitial && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
         </div>
-        <div style={{ height: 'calc(100% - 45px)' }}>
+        <div className="overflow-hidden rounded-b-xl" style={{ height: 'calc(100% - 45px)' }}>
           {centerAgentId ? (
             <ReactFlow
               nodes={nodes}
@@ -401,28 +401,6 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
       </div>
 
       <TokenInspectorPanel target={inspecting} />
-    </div>
-  );
-}
-
-// Thin wrapper reusing AgentPicker's search UX inline instead of in a modal — same component,
-// just rendered directly rather than behind an "Add" button + popover.
-function AgentPickerInline({ agents, value, onSelect }: { agents: AgentOption[]; value: string; onSelect: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const selectedName = agents.find((a) => a.id === value)?.name;
-  if (!open && value) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="w-full text-left text-sm font-semibold text-[var(--text-primary)] px-2 py-1.5 rounded-lg hover:bg-[var(--bg-surface-muted)] transition-colors truncate"
-      >
-        {selectedName}
-      </button>
-    );
-  }
-  return (
-    <div className="relative">
-      <AgentPicker excludeAgentId="" onSelect={(a) => { onSelect(a.id); setOpen(false); }} />
     </div>
   );
 }
