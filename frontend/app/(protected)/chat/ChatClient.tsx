@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Send, RefreshCw, ChevronDown, ChevronRight, Bot, User, LogIn, LogOut, Calendar, DollarSign } from 'lucide-react';
+import { Send, RefreshCw, ChevronDown, ChevronRight, Bot, User, LogIn, LogOut, Calendar, DollarSign, ShieldOff, ShieldCheck } from 'lucide-react';
 import AgentCombobox from '@/components/AgentCombobox';
 import type { TokenResult } from '@/components/TokenStepCard';
 import ChatGraphPanel from './ChatGraphPanel';
@@ -9,7 +9,7 @@ import type { ChatHopTrace } from './chatGraph';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
-interface AgentOption { id: string; name: string; description?: string; }
+interface AgentOption { id: string; name: string; description?: string; killSwitchActive?: boolean; }
 interface ToolCallRecord { name: string; args: any; result: any; }
 interface Message { role: 'user' | 'assistant'; content: string; toolCalls?: ToolCallRecord[]; }
 
@@ -79,6 +79,10 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
   // switch) so the graph isn't blank until the next message.
   const [loginInfo, setLoginInfo] = useState<TokenResult | null>(null);
   const [tokenTrace, setTokenTrace] = useState<{ hops: ChatHopTrace[] } | null>(null);
+  // Remediation demo — see toggleKillSwitch/refreshKillSwitchState below. Independent of
+  // login/logout and the scope-mode toggle; it's a property of the agent, not the session.
+  const [killSwitchActive, setKillSwitchActive] = useState(false);
+  const [killSwitchBusy, setKillSwitchBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Both panels' heights are user-resizable via the drag bar between them — chatHeight is the
@@ -134,6 +138,7 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
         setLoginRid(result);
         setError('');
         checkSessionValid(agentId, result, mode === 'full' ? 'full' : 'readonly');
+        refreshKillSwitchState(agentId);
       }
       router.replace('/chat');
       return;
@@ -167,11 +172,28 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     }
   }
 
+  // /api/chat/eligible-agents (the source of the `agents` prop and this.killSwitchActive) is cached
+  // server-side for up to 30s, and the resume-after-login redirect can land moments after a revoke —
+  // so trusting either the prop or a stale in-memory value can show the wrong state right when it
+  // matters most for the demo. GET /api/agents/:id is never cached, so this is the one place this
+  // component treats killSwitchActive as authoritative.
+  async function refreshKillSwitchState(agentId: string) {
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}`);
+      const data = await res.json();
+      setKillSwitchActive(!!data.killSwitchActive);
+    } catch {
+      // leave whatever was last known rather than guessing
+    }
+  }
+
   async function selectAgent(agent: AgentOption) {
     setSelectedAgent(agent);
     setMessages([]);
     setError('');
     setLoginInfo(null); setTokenTrace(null);
+    setKillSwitchActive(!!agent.killSwitchActive);
+    refreshKillSwitchState(agent.id);
     const rid = getLoginRid(agent.id);
     if (rid && await checkSessionValid(agent.id, rid, selectedMode)) { setLoginRid(rid); return; }
     if (rid) sessionStorage.removeItem(`chat-login:${agent.id}`);
@@ -220,6 +242,25 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     setTokenTrace(null);
   }
 
+  // Remediation demo: flips the agent's kill switch. This deactivates the agent's live Okta
+  // credential (not just a status flag) so the very next token request Okta itself refuses —
+  // real enforcement at the identity provider, not this app pretending to block anything.
+  async function toggleKillSwitch() {
+    if (!selectedAgent || killSwitchBusy) return;
+    setKillSwitchBusy(true);
+    setError('');
+    try {
+      const path = killSwitchActive ? 'kill-switch/restore' : 'kill-switch';
+      const res = await fetch(`${BACKEND}/api/agents/${selectedAgent.id}/${path}`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update kill switch');
+      setKillSwitchActive(!!data.killSwitchActive);
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setKillSwitchBusy(false);
+  }
+
   async function sendMessage() {
     if (!input.trim() || !selectedAgent || !loginRid || sending) return;
     const userMessage: Message = { role: 'user', content: input.trim() };
@@ -266,6 +307,21 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
           </div>
           <div className="ml-auto flex items-center gap-2">
             {selectedAgent && (
+              <button
+                onClick={toggleKillSwitch}
+                disabled={killSwitchBusy}
+                title={killSwitchActive ? 'Restore this agent\'s Okta credentials' : 'Revoke this agent\'s Okta credentials — simulates remediating a rogue or compromised agent'}
+                className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
+                  killSwitchActive
+                    ? 'bg-red-600 border-red-600 text-white'
+                    : 'bg-[var(--bg-surface-muted)] border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-red-50 hover:border-red-200 hover:text-red-600'
+                }`}
+              >
+                {killSwitchBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : killSwitchActive ? <ShieldOff className="w-3.5 h-3.5" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                {killSwitchActive ? 'Access revoked' : 'Revoke access'}
+              </button>
+            )}
+            {selectedAgent && (
               <div className="flex items-center gap-1 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg p-1">
                 {(['readonly', 'full'] as const).map((mode) => (
                   <button
@@ -304,6 +360,13 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
             {sending && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
           </div>
         </div>
+
+        {killSwitchActive && (
+          <div className="px-4 py-2 text-xs font-medium text-red-700 bg-red-50 border-b border-red-200 flex items-center gap-1.5">
+            <ShieldOff className="w-3.5 h-3.5" />
+            Okta has revoked this agent's credentials — requests will be rejected at the token endpoint until access is restored.
+          </div>
+        )}
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
           {!selectedAgent ? (

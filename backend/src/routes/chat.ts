@@ -65,6 +65,23 @@ interface ChatSession {
 }
 const chatSessions = new Map<string, ChatSession>();
 
+// Chat caches each mode's Campaigns access token for up to ~1hr (see campaignsAccessTokenByMode
+// above) so it doesn't re-run the full XAA exchange on every message. That means revoking an
+// agent's Okta credential (the kill switch, routes/agents.ts) blocks NEW token mints immediately,
+// but any already-cached token for that agent keeps working until it naturally expires — Okta was
+// never asked again. The kill switch route calls this right after revoking so every open session
+// for that agent is forced to re-mint (and get genuinely rejected by Okta) on its very next
+// message, instead of silently working for up to an hour. The login itself (idToken) is left
+// intact — only the downstream Campaigns tokens (both scope modes' caches) are dropped.
+export function invalidateCachedTokensForAgent(dashboardAgentId: string) {
+  for (const session of chatSessions.values()) {
+    if (session.agentId === dashboardAgentId) {
+      session.campaignsAccessTokenByMode = {};
+      session.campaignsTokenExpiresAtByMode = {};
+    }
+  }
+}
+
 function pruneExpired<T extends { createdAt: number }>(map: Map<string, T>, maxAgeMs: number) {
   const now = Date.now();
   for (const [key, value] of map) {
@@ -155,7 +172,7 @@ router.get('/eligible-agents', async (_req: Request, res: Response) => {
 
     const eligible = withAgentId.filter((a) => reachable.has(a.oktaAgentId!));
 
-    const result = eligible.map((a) => ({ id: a.id, name: a.name, description: a.description }));
+    const result = eligible.map((a) => ({ id: a.id, name: a.name, description: a.description, killSwitchActive: a.killSwitchActive }));
     eligibleAgentsCache = { value: result, expiresAt: Date.now() + 30_000 };
     res.json(result);
   } catch (e: any) {
@@ -321,6 +338,12 @@ function resolveCallerCred(agent: { testClientSecret: string | null; testPrivate
 // first time an agent is used in chat, using the same app-backed-vs-native detection routes.ts's
 // credential endpoints already rely on (oktaAgent.appId truthy => app-backed).
 async function ensureCallerCredential(agent: NonNullable<Awaited<ReturnType<typeof store.findAgentById>>>) {
+  // Kill switch guard: without this, an agent that's never sent a chat message before (no
+  // persisted testClientSecret yet) would silently mint a FRESH, un-killed secret right here on
+  // its very first request after being "revoked" — bypassing the real Okta-side enforcement
+  // entirely. Agents that already have a stored credential are covered anyway (Okta itself
+  // rejects the killed one at the token endpoint), but this keeps the never-used case honest too.
+  if (agent.killSwitchActive) throw new Error('This agent\'s Okta credentials have been revoked — restore access before chatting');
   if (agent.testPrivateKeyPem && agent.testPrivateKeyKid) return resolveCallerCred(agent);
   if (agent.testClientSecret) return resolveCallerCred(agent);
 

@@ -2,7 +2,7 @@ import { Agent, Resource, Campaign } from './schema';
 import { PostgresStore } from './postgresStore';
 import { MemoryStore } from './memoryStore';
 
-export type AgentPatch = Partial<Pick<Agent, 'name' | 'description' | 'status' | 'ownerId' | 'ownerName' | 'ownerEmail' | 'testClientSecret' | 'testPrivateKeyPem' | 'testPrivateKeyKid'>>;
+export type AgentPatch = Partial<Pick<Agent, 'name' | 'description' | 'status' | 'ownerId' | 'ownerName' | 'ownerEmail' | 'testClientSecret' | 'testPrivateKeyPem' | 'testPrivateKeyKid' | 'killSwitchActive' | 'killSwitchCredentials'>>;
 export type NewAgent = Pick<Agent, 'name' | 'oktaAgentId' | 'status'> & Partial<Pick<Agent, 'description' | 'createdBy'>>;
 
 export type NewCampaign = Pick<Campaign, 'name'> & Partial<Pick<Campaign, 'description' | 'status' | 'budget' | 'startDate' | 'endDate'>>;

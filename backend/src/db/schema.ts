@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, primaryKey, numeric } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, jsonb, primaryKey, numeric, boolean } from 'drizzle-orm/pg-core';
 
 export const agents = pgTable('agents', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -16,6 +16,14 @@ export const agents = pgTable('agents', {
   testClientSecret: text('test_client_secret'),
   testPrivateKeyPem: text('test_private_key_pem'),
   testPrivateKeyKid: text('test_private_key_kid'),
+  // Kill switch (see routes/agents.ts POST /:id/kill-switch): deactivates the agent's own live
+  // credential(s) in Okta so its token endpoint genuinely refuses them, rather than merely flipping
+  // a status flag the token endpoint doesn't check (confirmed live — agent status is NOT enforced
+  // at the token endpoint, credential lifecycle status IS). killSwitchCredentials is a JSON array of
+  // { type: 'secret' | 'jwk', id: string } for exactly the credentials this flipped, so restore can
+  // reactivate precisely those rather than guessing.
+  killSwitchActive: boolean('kill_switch_active').default(false).notNull(),
+  killSwitchCredentials: text('kill_switch_credentials'),
 });
 
 export const resources = pgTable('resources', {

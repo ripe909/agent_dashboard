@@ -58,11 +58,15 @@ async function migrate() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       test_client_secret TEXT,
       test_private_key_pem TEXT,
-      test_private_key_kid TEXT
+      test_private_key_kid TEXT,
+      kill_switch_active BOOLEAN NOT NULL DEFAULT FALSE,
+      kill_switch_credentials TEXT
     );
     ALTER TABLE agents ADD COLUMN IF NOT EXISTS test_client_secret TEXT;
     ALTER TABLE agents ADD COLUMN IF NOT EXISTS test_private_key_pem TEXT;
     ALTER TABLE agents ADD COLUMN IF NOT EXISTS test_private_key_kid TEXT;
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS kill_switch_active BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS kill_switch_credentials TEXT;
     CREATE TABLE IF NOT EXISTS resources (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,

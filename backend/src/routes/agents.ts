@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { store } from '../db/client';
 import * as okta from '../services/okta';
+import { invalidateCachedTokensForAgent } from './chat';
 
 const router = Router();
 
@@ -236,6 +237,51 @@ router.post('/:id/deactivate', async (req: Request, res: Response) => {
     await okta.deactivateAIAgent(agent.oktaAgentId);
     await store.updateAgentById(req.params.id, { status: 'inactive' });
     res.json({ message: 'Deactivated' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/kill-switch — remediation demo: deactivates the agent's live Okta
+// credential(s) so its token endpoint genuinely refuses them going forward (confirmed live —
+// unlike agent status, credential lifecycle status IS enforced at the token endpoint). Idempotent:
+// calling this while already killed is a no-op that just returns the existing state.
+router.post('/:id/kill-switch', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    if (agent.killSwitchActive) return res.json({ killSwitchActive: true });
+
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    if (oktaAgent.appId) {
+      return res.status(400).json({ error: 'This agent authenticates through a backing app — the kill switch only supports native agent credentials today' });
+    }
+
+    const result = await okta.killAgentCredentials(agent.oktaAgentId);
+    await store.updateAgentById(agent.id, { killSwitchActive: true, killSwitchCredentials: JSON.stringify(result) });
+    // Without this, any chat session that already minted a Campaigns access token before the
+    // revocation keeps working off that cached token for up to ~1hr — Okta only blocks NEW mints,
+    // it has no way to reach into this app's cache. Dropping the cache forces every open session to
+    // re-mint (and get genuinely rejected) on its very next message instead of silently continuing.
+    invalidateCachedTokensForAgent(agent.id);
+    res.json({ killSwitchActive: true, credentialsRevoked: result.killed.length });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/kill-switch/restore — reactivates exactly the credential(s) the kill switch
+// deactivated, restoring the agent to normal operation.
+router.post('/:id/kill-switch/restore', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    if (!agent.killSwitchActive) return res.json({ killSwitchActive: false });
+
+    const result: okta.KillResult = agent.killSwitchCredentials ? JSON.parse(agent.killSwitchCredentials) : { killed: [] };
+    await okta.restoreAgentCredentials(agent.oktaAgentId, result);
+    await store.updateAgentById(agent.id, { killSwitchActive: false, killSwitchCredentials: null });
+    res.json({ killSwitchActive: false });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

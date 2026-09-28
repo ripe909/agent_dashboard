@@ -37,6 +37,8 @@ export class MemoryStore implements Store {
       testClientSecret: null,
       testPrivateKeyPem: null,
       testPrivateKeyKid: null,
+      killSwitchActive: false,
+      killSwitchCredentials: null,
     };
     this.agentsById.set(agent.id, agent);
     return agent;

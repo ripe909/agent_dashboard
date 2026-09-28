@@ -751,6 +751,97 @@ export async function listAgentSecrets(agentId: string): Promise<AgentSecret[]> 
   return (data || []).map((s) => ({ id: s.id, status: s.status, created: s.created }));
 }
 
+// Confirmed live: an agent's own ACTIVE/INACTIVE status is NOT enforced at the token endpoint (a
+// deactivated agent's credentials still authenticate fine). Deactivating the credential itself IS
+// enforced — Okta's token endpoint returns invalid_client for a deactivated secret/jwk. This is
+// therefore genuine Okta-side enforcement, not app-side pretending, since the app never touches
+// token issuance — it just tells Okta the credential is dead, and Okta refuses it from then on.
+export type KilledCredential = { type: 'secret' | 'jwk'; id: string };
+
+export async function deactivateAgentSecret(agentId: string, secretId: string): Promise<void> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets/${secretId}/lifecycle/deactivate`, { method: 'POST' });
+  if (!res.ok) throw new Error(`deactivateAgentSecret ${res.status}: ${await res.text()}`);
+}
+
+export async function activateAgentSecret(agentId: string, secretId: string): Promise<void> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets/${secretId}/lifecycle/activate`, { method: 'POST' });
+  if (!res.ok) throw new Error(`activateAgentSecret ${res.status}: ${await res.text()}`);
+}
+
+export async function deactivateAgentJwk(agentId: string, kid: string): Promise<void> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/jwks/${kid}/lifecycle/deactivate`, { method: 'POST' });
+  if (!res.ok) throw new Error(`deactivateAgentJwk ${res.status}: ${await res.text()}`);
+}
+
+export async function activateAgentJwk(agentId: string, kid: string): Promise<void> {
+  const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/jwks/${kid}/lifecycle/activate`, { method: 'POST' });
+  if (!res.ok) throw new Error(`activateAgentJwk ${res.status}: ${await res.text()}`);
+}
+
+export interface KillResult { killed: KilledCredential[]; decoySecretId?: string; }
+
+// Deactivates every currently-ACTIVE secret credential for this agent. Returns exactly what was
+// flipped so the caller can persist it and reactivate the same set later. A no-op agent (no active
+// secrets, e.g. never used in Chat yet) returns an empty array rather than erroring.
+//
+// Scoped to secret-based agents only for now — createAgentSecret's own comment confirms this is
+// the path Chat's ensureCallerCredential actually provisions for native agents, and the workaround
+// below (decoy secret) has been tested against secrets specifically. If the agent's only active
+// credential turns out to be a JWK instead, this throws a clear "not supported yet" error rather
+// than attempting an untested deactivation path.
+//
+// Confirmed live: Okta refuses to deactivate an agent's LAST remaining active secret at all
+// ("You can't deactivate the only active client secret") — a hard floor of >=1 active secret, not
+// something specific to running deactivations in parallel. Since the whole point here is to drive
+// every REAL secret to zero active, this always mints a throwaway "decoy" secret first via a bare
+// POST and immediately discards its returned value without persisting or returning it anywhere —
+// nothing in this app or anyone using it ever learns that value, so it satisfies Okta's bookkeeping
+// requirement (there's always >=1 active secret, just not one anyone can use) without being a
+// usable credential for anyone. The decoy is cleaned up again by restoreAgentCredentials.
+//
+// Deactivations run sequentially, not in parallel — a parallel batch raced through Okta's
+// last-active check and let one succeed before the other's check saw it, leaving one credential
+// stuck INACTIVE despite the whole call throwing (found via live testing).
+//
+// App-backed agents (a separate OIDC app holds the real oauthClient credential — see
+// AgentCredentials's 'source: app' branch) aren't supported here: there's no partial-deactivate-
+// the-credential-without-touching-the-app lifecycle for those, and forcing one through app
+// deactivation would corrupt the agent's backing app entirely, which the demo explicitly must not
+// do. Callers should check oktaAgent.appId first and surface a clear error for that case.
+export async function killAgentCredentials(agentId: string): Promise<KillResult> {
+  const [secrets, jwks] = await Promise.all([listAgentSecrets(agentId), listAgentJwks(agentId)]);
+  const activeSecrets = secrets.filter((s) => s.status === 'ACTIVE');
+  const activeJwks = jwks.filter((k) => k.status === 'ACTIVE');
+  if (activeSecrets.length === 0 && activeJwks.length === 0) return { killed: [] };
+  if (activeSecrets.length === 0 && activeJwks.length > 0) {
+    throw new Error('This agent authenticates via a JWK (private_key_jwt), not a client secret — the kill switch only supports secret-based agents today');
+  }
+
+  const decoyRes = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets`, { method: 'POST', body: JSON.stringify({}) });
+  if (!decoyRes.ok) throw new Error(`createDecoySecret ${decoyRes.status}: ${await decoyRes.text()}`);
+  const decoyData = await decoyRes.json() as any;
+  const decoySecretId: string = decoyData.id; // client_secret value is deliberately never read/stored/returned
+
+  for (const s of activeSecrets) await deactivateAgentSecret(agentId, s.id);
+
+  return {
+    killed: activeSecrets.map((s): KilledCredential => ({ type: 'secret', id: s.id })),
+    decoySecretId,
+  };
+}
+
+// Reactivates exactly the secrets a prior killAgentCredentials call deactivated, then retires the
+// decoy secret (if one was minted) — deactivate-then-delete, same sequence createAgentSecret's own
+// rotation logic already uses, since Okta requires a secret be deactivated before it can be
+// deleted. Runs sequentially for the same reason killAgentCredentials does.
+export async function restoreAgentCredentials(agentId: string, result: KillResult): Promise<void> {
+  for (const c of result.killed) await activateAgentSecret(agentId, c.id);
+  if (result.decoySecretId) {
+    await deactivateAgentSecret(agentId, result.decoySecretId);
+    await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets/${result.decoySecretId}`, { method: 'DELETE' });
+  }
+}
+
 // Adding a secret credential record to a native agent does NOT change what its real OAuth client
 // is configured to authenticate with — confirmed live: a freshly-created agent defaults to
 // private_key_jwt, and POSTing a secret just adds a record Okta will never actually accept,
