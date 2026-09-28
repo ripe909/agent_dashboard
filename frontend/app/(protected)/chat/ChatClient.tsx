@@ -47,26 +47,29 @@ function extractCampaigns(toolCalls?: ToolCallRecord[]): Campaign[] {
 type ScopeMode = 'readonly' | 'full';
 const SCOPE_MODE_LABELS: Record<ScopeMode, string> = { readonly: 'Read-only', full: 'Full access' };
 
-// loginRid -> which agent+scopeMode it's valid for, kept in sessionStorage so a page reload (or
-// the full navigation the Okta login redirect causes) doesn't lose it — the id_token itself never
-// reaches the browser at all, only this opaque rid the backend keeps mapped to it. Keyed by mode
-// too so testing an agent under both read-only and full access doesn't require re-logging in each
-// time you switch back and forth.
-function storeLoginRid(agentId: string, mode: ScopeMode, rid: string) {
-  sessionStorage.setItem(`chat-login:${agentId}:${mode}`, rid);
+// loginRid -> which agent it's valid for, kept in sessionStorage so a page reload (or the full
+// navigation the Okta login redirect causes) doesn't lose it — the id_token itself never reaches
+// the browser at all, only this opaque rid the backend keeps mapped to it. One login per agent —
+// the scope mode is a per-message choice (see selectedMode below), not a property of the login
+// itself, so there's no separate rid per mode to track anymore.
+function storeLoginRid(agentId: string, rid: string) {
+  sessionStorage.setItem(`chat-login:${agentId}`, rid);
 }
-function getLoginRid(agentId: string, mode: ScopeMode): string | null {
-  return sessionStorage.getItem(`chat-login:${agentId}:${mode}`);
+function getLoginRid(agentId: string): string | null {
+  return sessionStorage.getItem(`chat-login:${agentId}`);
 }
 
 export default function ChatClient({ agents }: { agents: AgentOption[] }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [selectedAgent, setSelectedAgent] = useState<AgentOption | null>(null);
-  // Which scope-mode session is currently active in the chat window, and the rid backing it.
-  const [activeMode, setActiveMode] = useState<ScopeMode | null>(null);
+  // selectedMode is a plain toggle for which scope the NEXT message's XAA exchange should ask
+  // for — entirely independent of login/logout. loginRid is the one active login for the
+  // selected agent, if any; there's no per-mode session anymore, since the backend now caches one
+  // Campaigns token per mode underneath a single login rather than requiring a separate login per mode.
+  const [selectedMode, setSelectedMode] = useState<ScopeMode>('readonly');
   const [loginRid, setLoginRid] = useState<string | null>(null);
-  const [loggingInMode, setLoggingInMode] = useState<ScopeMode | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -120,15 +123,17 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     const agentId = searchParams.get('agentId');
     const mode = searchParams.get('scopeMode');
     if (err) { setError(err); router.replace('/chat'); return; }
-    if (result && agentId && (mode === 'readonly' || mode === 'full')) {
+    if (result && agentId) {
       const agent = agents.find((a) => a.id === agentId);
       if (agent) {
-        storeLoginRid(agentId, mode, result);
+        storeLoginRid(agentId, result);
         setSelectedAgent(agent);
-        setActiveMode(mode);
+        // scopeMode round-trips through the redirect purely so the toggle you had selected before
+        // logging in survives the full page navigation, instead of resetting to the default.
+        if (mode === 'readonly' || mode === 'full') setSelectedMode(mode);
         setLoginRid(result);
         setError('');
-        checkSessionValid(agentId, result);
+        checkSessionValid(agentId, result, mode === 'full' ? 'full' : 'readonly');
       }
       router.replace('/chat');
       return;
@@ -146,12 +151,11 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
 
   // A loginRid cached in sessionStorage can outlive the backend's own in-memory session for it —
   // e.g. a backend restart wipes chatSessions entirely, but sessionStorage still says "logged in".
-  // Without checking, the UI would show a plain mode-switch button (no network call at all) that
-  // silently does nothing forever, since switchMode never talks to the backend. Verifying first
-  // means a stale rid always falls back to a real "Log in" click instead of a dead button.
-  async function checkSessionValid(agentId: string, rid: string): Promise<boolean> {
+  // Without checking, the UI would show a Logged in state (no network call at all) that's
+  // actually dead. Verifying first means a stale rid always falls back to a real "Log in" state.
+  async function checkSessionValid(agentId: string, rid: string, mode: ScopeMode): Promise<boolean> {
     try {
-      const res = await fetch(`${BACKEND}/api/chat/${agentId}/session/${rid}`);
+      const res = await fetch(`${BACKEND}/api/chat/${agentId}/session/${rid}?scopeMode=${mode}`);
       const data = await res.json();
       if (data.valid) {
         setLoginInfo(data.login ?? null);
@@ -168,60 +172,48 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     setMessages([]);
     setError('');
     setLoginInfo(null); setTokenTrace(null);
-    // Prefer a full-access session if one already exists, else read-only, else none — either way
-    // the login buttons below make it obvious which mode (if any) is actually active.
-    const fullRid = getLoginRid(agent.id, 'full');
-    const readonlyRid = getLoginRid(agent.id, 'readonly');
-    if (fullRid && await checkSessionValid(agent.id, fullRid)) { setActiveMode('full'); setLoginRid(fullRid); return; }
-    if (fullRid) sessionStorage.removeItem(`chat-login:${agent.id}:full`);
-    if (readonlyRid && await checkSessionValid(agent.id, readonlyRid)) { setActiveMode('readonly'); setLoginRid(readonlyRid); return; }
-    if (readonlyRid) sessionStorage.removeItem(`chat-login:${agent.id}:readonly`);
-    setActiveMode(null); setLoginRid(null);
+    const rid = getLoginRid(agent.id);
+    if (rid && await checkSessionValid(agent.id, rid, selectedMode)) { setLoginRid(rid); return; }
+    if (rid) sessionStorage.removeItem(`chat-login:${agent.id}`);
+    setLoginRid(null);
   }
 
-  async function login(mode: ScopeMode) {
+  // Purely a scope toggle — never starts or ends a login. Re-checks the existing session (if any)
+  // under the newly selected mode so the token-flow graph immediately reflects whichever mode's
+  // cached trace exists, without requiring a new message.
+  async function selectMode(mode: ScopeMode) {
+    setSelectedMode(mode);
+    if (!selectedAgent || !loginRid) return;
+    checkSessionValid(selectedAgent.id, loginRid, mode);
+  }
+
+  async function login() {
     if (!selectedAgent) return;
-    setLoggingInMode(mode);
+    setLoggingIn(true);
     setError('');
     try {
       const res = await fetch(`${BACKEND}/api/chat/${selectedAgent.id}/login/start`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scopeMode: mode }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scopeMode: selectedMode }),
       });
       const data = await res.json();
       if (!res.ok || !data.authorizeUrl) throw new Error(data.error || 'Failed to start login');
       window.location.href = data.authorizeUrl;
     } catch (e: any) {
       setError(e.message);
-      setLoggingInMode(null);
+      setLoggingIn(false);
     }
   }
 
-  async function switchMode(mode: ScopeMode) {
-    if (!selectedAgent) return;
-    const rid = getLoginRid(selectedAgent.id, mode);
-    if (rid && await checkSessionValid(selectedAgent.id, rid)) {
-      setActiveMode(mode);
-      setLoginRid(rid);
-      setMessages([]);
-      return;
-    }
-    // Stale — the cached rid no longer maps to a real backend session. Clear it and fall through
-    // to a real login instead of leaving the button looking clickable but doing nothing.
-    if (rid) sessionStorage.removeItem(`chat-login:${selectedAgent.id}:${mode}`);
-    setActiveMode(null); setLoginRid(null);
-    login(mode);
-  }
-
-  // Ends the active session both server-side (so a later switchMode/selectAgent can't silently
-  // resume it — checkSessionValid would otherwise still find it and treat it as "already logged
-  // in") and in sessionStorage, and clears everything the UI was showing for it.
+  // Ends the active session both server-side (so selectAgent can't silently resume it —
+  // checkSessionValid would otherwise still find it and treat it as "already logged in") and in
+  // sessionStorage, and clears everything the UI was showing for it. The scope mode toggle itself
+  // is untouched — logging out doesn't reset what you'd ask for on the next login.
   async function logout() {
-    if (!selectedAgent || !activeMode || !loginRid) return;
+    if (!selectedAgent || !loginRid) return;
     try {
       await fetch(`${BACKEND}/api/chat/${selectedAgent.id}/session/${loginRid}/logout`, { method: 'POST' });
     } catch {}
-    sessionStorage.removeItem(`chat-login:${selectedAgent.id}:${activeMode}`);
-    setActiveMode(null);
+    sessionStorage.removeItem(`chat-login:${selectedAgent.id}`);
     setLoginRid(null);
     setMessages([]);
     setLoginInfo(null);
@@ -241,12 +233,12 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
       const res = await fetch(`${BACKEND}/api/chat/${selectedAgent.id}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ loginRid, message: userMessage.content, history }),
+        body: JSON.stringify({ loginRid, message: userMessage.content, history, scopeMode: selectedMode }),
       });
       const data = await res.json();
       if (!res.ok) {
-        if (data.requiresLogin && selectedAgent && activeMode) {
-          sessionStorage.removeItem(`chat-login:${selectedAgent.id}:${activeMode}`);
+        if (data.requiresLogin && selectedAgent) {
+          sessionStorage.removeItem(`chat-login:${selectedAgent.id}`);
           setLoginRid(null);
         }
         throw new Error(data.error || 'Chat request failed');
@@ -273,33 +265,41 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
             />
           </div>
           <div className="ml-auto flex items-center gap-2">
-            {selectedAgent && (['readonly', 'full'] as const).map((mode) => {
-              const hasSession = !!getLoginRid(selectedAgent.id, mode);
-              const isActive = activeMode === mode && !!loginRid;
-              return (
+            {selectedAgent && (
+              <div className="flex items-center gap-1 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg p-1">
+                {(['readonly', 'full'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => selectMode(mode)}
+                    className={`text-xs font-semibold px-2.5 py-1 rounded-md transition-colors ${
+                      selectedMode === mode ? 'bg-[#1662dd] text-white' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    {SCOPE_MODE_LABELS[mode]}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedAgent && (
+              loginRid ? (
                 <button
-                  key={mode}
-                  onClick={() => hasSession ? switchMode(mode) : login(mode)}
-                  disabled={loggingInMode !== null}
-                  className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
-                    isActive
-                      ? 'bg-[#1662dd] border-[#1662dd] text-white'
-                      : 'bg-[#1662dd]/15 border-[#1662dd]/25 text-[#1662dd] hover:bg-[#1662dd]/25'
-                  }`}
+                  onClick={logout}
+                  title="Log out"
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-muted)] transition-colors"
                 >
-                  {loggingInMode === mode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
-                  {hasSession ? SCOPE_MODE_LABELS[mode] : `Log in — ${SCOPE_MODE_LABELS[mode]}`}
+                  <LogOut className="w-3.5 h-3.5" /> Log out
                 </button>
-              );
-            })}
-            {selectedAgent && activeMode && loginRid && (
-              <button
-                onClick={logout}
-                title="Log out of this session"
-                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-muted)] transition-colors"
-              >
-                <LogOut className="w-3.5 h-3.5" /> Log out
-              </button>
+              ) : (
+                <button
+                  onClick={login}
+                  disabled={loggingIn}
+                  title="Log in"
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-[#1662dd]/25 bg-[#1662dd]/15 text-[#1662dd] hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40"
+                >
+                  {loggingIn ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+                  Log in
+                </button>
+              )
             )}
             {sending && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
           </div>
@@ -312,12 +312,12 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
             </div>
           ) : !loginRid ? (
             <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
-              Log in as {selectedAgent.name} (read-only or full access) to start chatting
+              Log in as {selectedAgent.name} to start chatting
             </div>
           ) : messages.length === 0 ? (
             <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
               Ask {selectedAgent.name} to create, search, read, update, or delete a marketing campaign
-              {activeMode === 'readonly' && ' (read-only session — writes will be rejected)'}
+              {selectedMode === 'readonly' && ' (read-only mode — writes will be rejected)'}
             </div>
           ) : (
             messages.map((m, i) => <MessageBubble key={i} message={m} />)
@@ -358,7 +358,7 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
             agentId={selectedAgent.id}
             login={loginInfo}
             hops={tokenTrace?.hops || []}
-            scopeModeLabel={activeMode ? SCOPE_MODE_LABELS[activeMode] : ''}
+            scopeModeLabel={SCOPE_MODE_LABELS[selectedMode]}
             expanded={graphExpanded}
             onToggleExpanded={() => setGraphExpanded((v) => !v)}
             canvasHeight={graphCanvasHeight}

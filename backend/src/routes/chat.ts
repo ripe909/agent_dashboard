@@ -12,11 +12,12 @@ const ORG = () => process.env.OKTA_ORG_URL!;
 const BACKEND_PUBLIC_URL = () => process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
 const FRONTEND_URL = () => process.env.FRONTEND_URL || 'http://localhost:3000';
 
-// Lets a test session log in with either the full scope set or a deliberately narrowed one, so an
-// agent's behavior under reduced privilege can be exercised without touching its real Okta
-// connection — the scope choice rides through login → the XAA exchange, since login itself
-// (a plain OIDC code flow against the agent's own app) carries no scopes; only the id-jag exchange
-// that follows does.
+// Lets a chat session ask for either the full scope set or a deliberately narrowed one on any
+// given turn, so an agent's behavior under reduced privilege can be exercised without touching
+// its real Okta connection — the mode is NOT tied to the user's login (a plain OIDC code flow
+// against the agent's own app, carrying no scopes at all); it's just which scope the id-jag
+// exchange asks for on whichever message is being sent right now, so switching it mid-session
+// takes effect on the very next message without requiring a new login.
 type ScopeMode = 'readonly' | 'full';
 const SCOPES_BY_MODE: Record<ScopeMode, string> = {
   readonly: 'api.read api.search',
@@ -39,6 +40,9 @@ function decodeIdToken(jwt: string): any {
 // same reasoning as the Exercise page's real User Access flow in exercise.ts, whose pattern this
 // mirrors (separate in-memory maps here rather than importing exercise.ts's, since those are
 // private to that file's stepwise-click flow).
+// scopeMode here is passed straight through to the callback's redirect query string, purely so
+// the frontend's mode toggle survives the login redirect's full page navigation — it plays no
+// part in the login exchange itself and isn't stored on the resulting ChatSession.
 const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; clientSecret: string; scopeMode: ScopeMode; createdAt: number }>();
 // One hop per agent in the resolved A2A chain — hops[i] is performed BY agentChain[i]; every hop
 // but the last targets the next agent in the chain, the last targets the Marketing MCP AS itself.
@@ -48,12 +52,16 @@ interface ChatHopTrace { agentId: string; agentName: string; exchange: okta.Exer
 interface ChatTokenTrace { hops: ChatHopTrace[]; }
 
 interface ChatSession {
-  agentId: string; idToken: string; scopeMode: ScopeMode; createdAt: number;
-  campaignsAccessToken?: string; campaignsTokenExpiresAt?: number;
+  agentId: string; idToken: string; createdAt: number;
+  // Keyed by scope mode — the SAME login can be exercised under either mode without a new login,
+  // so each mode's own Campaigns access token (and the trace that produced it) is cached
+  // separately rather than the session holding just one of each.
+  campaignsAccessTokenByMode: Partial<Record<ScopeMode, string>>;
+  campaignsTokenExpiresAtByMode: Partial<Record<ScopeMode, number>>;
+  tokenTraceByMode: Partial<Record<ScopeMode, ChatTokenTrace>>;
   // Decoded claims only — the raw id_token string never leaves login/callback's own scope, same
   // as every other decoded-claims response in this app (e.g. exercise.ts's /user-access/result).
   login?: okta.ExerciseTokenResult;
-  tokenTrace?: ChatTokenTrace;
 }
 const chatSessions = new Map<string, ChatSession>();
 
@@ -170,15 +178,19 @@ router.get('/:agentId/session/:loginRid', (req: Request, res: Response) => {
   // never generates an ETag or honors If-None-Match.
   res.type('application/json');
   // login/tokenTrace let the frontend hydrate the read-only token-flow graph right after a login
-  // redirect or a page reload with a cached loginRid, without waiting for a chat message.
-  res.end(JSON.stringify(valid ? { valid, login: session!.login, tokenTrace: session!.tokenTrace } : { valid }));
+  // redirect or a page reload with a cached loginRid, without waiting for a chat message. The
+  // trace shown is whichever scope mode the caller currently has selected (?scopeMode=), since a
+  // single login can carry a distinct cached trace per mode.
+  const scopeMode = isScopeMode(req.query.scopeMode) ? req.query.scopeMode : undefined;
+  const tokenTrace = valid && scopeMode ? session!.tokenTraceByMode[scopeMode] : undefined;
+  res.end(JSON.stringify(valid ? { valid, login: session!.login, tokenTrace } : { valid }));
 });
 
-// POST /api/chat/:agentId/session/:loginRid/logout — ends this one session server-side (this
-// login+scopeMode combination only; the other mode's session, if any, is untouched). The
-// frontend also clears its own sessionStorage entry, but that alone left the backend's session
-// alive — "switch mode" would find it still valid and silently resume it instead of really
-// logging out, which is the bug this closes.
+// POST /api/chat/:agentId/session/:loginRid/logout — ends the login session server-side (both
+// scope modes' cached tokens go with it, since they both hang off this one login). The frontend
+// also clears its own sessionStorage entry, but that alone left the backend's session alive —
+// re-selecting a mode would find it still valid and silently resume it instead of really logging
+// out, which is the bug this closes.
 router.post('/:agentId/session/:loginRid/logout', (req: Request, res: Response) => {
   const session = chatSessions.get(req.params.loginRid);
   if (session && session.agentId === req.params.agentId) chatSessions.delete(req.params.loginRid);
@@ -209,11 +221,13 @@ router.get('/:agentId/access-path', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/chat/:agentId/login/start — body { scopeMode: 'readonly' | 'full' }
+// POST /api/chat/:agentId/login/start — body { scopeMode?: 'readonly' | 'full' }. scopeMode isn't
+// used server-side at all (login itself carries no scopes and isn't tied to one) — it only rides
+// through pendingLogins/the callback redirect so the frontend's mode toggle survives the full page
+// navigation Okta's redirect causes, instead of resetting to its default on return.
 router.post('/:agentId/login/start', async (req: Request, res: Response) => {
   try {
-    const scopeMode = req.body?.scopeMode;
-    if (!isScopeMode(scopeMode)) return res.status(400).json({ error: "scopeMode must be 'readonly' or 'full'" });
+    const scopeMode = isScopeMode(req.body?.scopeMode) ? req.body.scopeMode : 'readonly';
 
     const agent = await store.findAgentById(req.params.agentId);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
@@ -284,7 +298,12 @@ router.get('/login/callback', async (req: Request, res: Response) => {
       decoded: { header: {}, payload: decodeIdToken(body.id_token) },
       raw: { note: 'User login (ID token)' },
     };
-    chatSessions.set(rid, { agentId: pending.agentId, idToken: body.id_token, scopeMode: pending.scopeMode, createdAt: Date.now(), login });
+    chatSessions.set(rid, {
+      agentId: pending.agentId, idToken: body.id_token, createdAt: Date.now(), login,
+      campaignsAccessTokenByMode: {}, campaignsTokenExpiresAtByMode: {}, tokenTraceByMode: {},
+    });
+    // scopeMode round-trips through the query string purely so the frontend's mode toggle can
+    // restore whatever was selected before the redirect — the session itself isn't scoped to it.
     res.redirect(`${FRONTEND_URL()}/chat?loginResult=${rid}&agentId=${pending.agentId}&scopeMode=${pending.scopeMode}`);
   } catch (e: any) {
     res.redirect(`${FRONTEND_URL()}/chat?loginError=${encodeURIComponent(e.message)}`);
@@ -400,8 +419,11 @@ async function callLlm(messages: any[], tools: any[]): Promise<any> {
 // POST /api/chat/:agentId/message — loginRid identifies a completed per-agent login (see
 // /login/start and /login/callback above); the id_token itself never leaves the backend.
 router.post('/:agentId/message', async (req: Request, res: Response) => {
-  const { loginRid, message, history } = req.body as { loginRid: string; message: string; history?: ChatMessage[] };
+  const { loginRid, message, history, scopeMode: rawScopeMode } = req.body as { loginRid: string; message: string; history?: ChatMessage[]; scopeMode?: unknown };
   if (!loginRid || !message) return res.status(400).json({ error: 'loginRid and message are required' });
+  // Which scope this specific message's XAA exchange should ask for — independent of the login
+  // session, since the mode toggle can change between messages without requiring a new login.
+  const scopeMode: ScopeMode = isScopeMode(rawScopeMode) ? rawScopeMode : 'readonly';
 
   try {
     const session = chatSessions.get(loginRid);
@@ -420,11 +442,12 @@ router.post('/:agentId/message', async (req: Request, res: Response) => {
     const campaignsAS = await okta.getAuthorizationServer(settings.campaignsAuthorizationServerId);
     if (!campaignsAS.issuer) return res.status(500).json({ error: 'Could not resolve the campaigns authorization server issuer' });
 
-    // Reuse the campaigns access token across turns of the same login session instead of
-    // re-running the full XAA chain (exchange + redemption) on every message — it's only
-    // re-minted once it's actually expired (with a small safety margin).
-    let accessToken = session.campaignsAccessToken;
-    const isExpired = !session.campaignsTokenExpiresAt || Date.now() > session.campaignsTokenExpiresAt - 30_000;
+    // Reuse THIS MODE's cached campaigns access token across turns instead of re-running the full
+    // XAA chain on every message — only re-minted once it's actually expired (with a small safety
+    // margin) or once the mode changes to one with no cached token yet.
+    let accessToken = session.campaignsAccessTokenByMode[scopeMode];
+    const expiresAt = session.campaignsTokenExpiresAtByMode[scopeMode];
+    const isExpired = !expiresAt || Date.now() > expiresAt - 30_000;
     if (!accessToken || isExpired) {
       const path = await resolveCampaignsAccessPath(agent, campaignsAS.issuer);
       if (!path) {
@@ -448,7 +471,7 @@ router.post('/:agentId/message', async (req: Request, res: Response) => {
         const cred = await ensureCallerCredential(hopAgent);
         const audience = isLastHop ? campaignsAS.issuer : path.a2aConnections[i].authorizationServer!.issuerUrl;
         const resource = isLastHop ? undefined : path.a2aConnections[i].resourceIndicator;
-        const scope = isLastHop ? SCOPES_BY_MODE[session.scopeMode] : undefined;
+        const scope = isLastHop ? SCOPES_BY_MODE[scopeMode] : undefined;
 
         const exchange = await okta.runIdJagExchange(`${ORG()}/oauth2/v1/token`, hopAgent.oktaAgentId!, cred, subjectToken, resource, audience, subjectTokenType, scope);
         if (!exchange.ok || !exchange.accessToken) return res.status(400).json({ error: exchange.raw?.error_description || exchange.raw?.error || 'Token exchange failed', step: exchange });
@@ -461,13 +484,13 @@ router.post('/:agentId/message', async (req: Request, res: Response) => {
         subjectTokenType = 'urn:ietf:params:oauth:token-type:access_token';
         if (isLastHop) {
           finalAccessToken = redemption.accessToken;
-          session.campaignsTokenExpiresAt = typeof redemption.decoded?.payload?.exp === 'number' ? redemption.decoded.payload.exp * 1000 : Date.now() + 60 * 60 * 1000;
+          session.campaignsTokenExpiresAtByMode[scopeMode] = typeof redemption.decoded?.payload?.exp === 'number' ? redemption.decoded.payload.exp * 1000 : Date.now() + 60 * 60 * 1000;
         }
       }
 
-      session.tokenTrace = { hops };
+      session.tokenTraceByMode[scopeMode] = { hops };
       accessToken = finalAccessToken;
-      session.campaignsAccessToken = accessToken;
+      session.campaignsAccessTokenByMode[scopeMode] = accessToken;
     }
 
     const transport = new StreamableHTTPClientTransport(new URL(`${BACKEND_PUBLIC_URL()}/mcp/campaigns`), {
@@ -498,7 +521,7 @@ CRITICAL FORMATTING RULE: The chat UI automatically renders a visual card for ev
         messages.push(response);
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
-          return res.json({ reply: response.content || 'I was unable to generate a response.', toolCalls, tokenTrace: session.tokenTrace, login: session.login });
+          return res.json({ reply: response.content || 'I was unable to generate a response.', toolCalls, tokenTrace: session.tokenTraceByMode[scopeMode], login: session.login });
         }
 
         for (const call of response.tool_calls) {
@@ -514,7 +537,7 @@ CRITICAL FORMATTING RULE: The chat UI automatically renders a visual card for ev
         }
       }
 
-      res.json({ reply: 'I was unable to complete your request after multiple attempts. Please try again.', toolCalls, tokenTrace: session.tokenTrace, login: session.login });
+      res.json({ reply: 'I was unable to complete your request after multiple attempts. Please try again.', toolCalls, tokenTrace: session.tokenTraceByMode[scopeMode], login: session.login });
     } finally {
       await mcpClient.close();
     }
