@@ -4,9 +4,11 @@ import type { AgentNodeData } from '../graphData';
 import TokenIcons, { type TokenIconsProps } from './TokenIcons';
 
 export interface AgentNodeExtra extends TokenIconsProps {
-  expanded: boolean;
-  expanding: boolean;
-  onExpand: () => void;
+  expanded?: boolean;
+  expanding?: boolean;
+  // Omitted entirely by read-only consumers (e.g. Chat's token-flow panel) — there's nothing to
+  // expand into when the graph isn't driven by fetchNeighbors, so the button just doesn't render.
+  onExpand?: () => void;
   selected: boolean;
   onSelect: () => void;
 }
@@ -30,9 +32,9 @@ export default function AgentNode({ data }: NodeProps & { data: AgentNodeData & 
           <div className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wide">AI agent</div>
           <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{data.name}</div>
         </div>
-        {!data.expanded && (
+        {data.onExpand && !data.expanded && (
           <button
-            onClick={(e) => { e.stopPropagation(); data.onExpand(); }}
+            onClick={(e) => { e.stopPropagation(); data.onExpand!(); }}
             title="Expand this agent's callers and downstream chain"
             className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-[var(--text-secondary)] hover:text-[#1662dd] hover:bg-[#1662dd]/10 transition-colors"
           >

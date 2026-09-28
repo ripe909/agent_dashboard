@@ -26,6 +26,11 @@ function isScopeMode(value: unknown): value is ScopeMode {
   return value === 'readonly' || value === 'full';
 }
 
+function decodeIdToken(jwt: string): any {
+  const [, payloadB64] = jwt.split('.');
+  return JSON.parse(Buffer.from(payloadB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+}
+
 // ── Per-agent login (User Access) ────────────────────────────────────────────
 // Chat's subject token has to be an id_token issued by the SELECTED AGENT'S OWN backing app —
 // not the dashboard's own NextAuth login app, which Okta rejects with "the client application is
@@ -35,9 +40,20 @@ function isScopeMode(value: unknown): value is ScopeMode {
 // mirrors (separate in-memory maps here rather than importing exercise.ts's, since those are
 // private to that file's stepwise-click flow).
 const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; clientSecret: string; scopeMode: ScopeMode; createdAt: number }>();
+// One hop per agent in the resolved A2A chain — hops[i] is performed BY agentChain[i]; every hop
+// but the last targets the next agent in the chain, the last targets the Marketing MCP AS itself.
+// Exposed to the frontend (via /message and /session/:loginRid) purely for the read-only graph
+// panel — never drives anything server-side beyond what campaignsAccessToken already does.
+interface ChatHopTrace { agentId: string; agentName: string; exchange: okta.ExerciseTokenResult; redemption: okta.ExerciseTokenResult; }
+interface ChatTokenTrace { hops: ChatHopTrace[]; }
+
 interface ChatSession {
   agentId: string; idToken: string; scopeMode: ScopeMode; createdAt: number;
   campaignsAccessToken?: string; campaignsTokenExpiresAt?: number;
+  // Decoded claims only — the raw id_token string never leaves login/callback's own scope, same
+  // as every other decoded-claims response in this app (e.g. exercise.ts's /user-access/result).
+  login?: okta.ExerciseTokenResult;
+  tokenTrace?: ChatTokenTrace;
 }
 const chatSessions = new Map<string, ChatSession>();
 
@@ -83,13 +99,13 @@ function hasDirectCampaignsConnection(connections: okta.AgentConnection[], campa
   );
 }
 
-// GET /api/chat/eligible-agents — an agent can chat if it EITHER has a direct ACTIVE Custom AS
-// connection to the configured Campaigns authorization server, OR has an ACTIVE agent-to-agent
-// (A2A) connection to some other onboarded agent that itself has that direct connection — in the
-// second case the primary agent asks the secondary one to perform the MCP action on its behalf
-// (see resolveCampaignsAccessPath below, used by /:agentId/message). One connections fetch per
-// onboarded agent either way — no extra Okta calls for the A2A check, it's computed in-memory
-// from the same pass.
+// GET /api/chat/eligible-agents — an agent can chat if it can reach the configured Campaigns
+// authorization server either directly, or through a CHAIN of ACTIVE agent-to-agent (A2A)
+// connections of any length ending at an agent with a direct connection (see
+// resolveCampaignsAccessPath below, used by /:agentId/message, which resolves the actual chain a
+// given agent would use). Reachability here is a reverse fixpoint over the same in-memory
+// connections-by-agent map every candidate needed anyway — no extra Okta calls no matter how deep
+// a chain runs.
 router.get('/eligible-agents', async (_req: Request, res: Response) => {
   try {
     if (eligibleAgentsCache && eligibleAgentsCache.expiresAt > Date.now()) {
@@ -113,15 +129,23 @@ router.get('/eligible-agents', async (_req: Request, res: Response) => {
       withAgentId.filter((a) => hasDirectCampaignsConnection(connectionsByOktaId.get(a.oktaAgentId!) || [], campaignsAS.issuer!)).map((a) => a.oktaAgentId!)
     );
 
-    const eligible = withAgentId.filter((a) => {
-      if (directOktaIds.has(a.oktaAgentId!)) return true;
-      const connections = connectionsByOktaId.get(a.oktaAgentId!) || [];
-      return connections.some((c) => {
-        if (c.connectionType !== 'IDENTITY_ASSERTION_A2A_SERVER' || c.status !== 'ACTIVE') return false;
-        const targetOktaId = c.resource?.orn?.split(':').pop();
-        return !!targetOktaId && directOktaIds.has(targetOktaId);
-      });
-    });
+    const adjacency = new Map<string, string[]>();
+    for (const a of withAgentId) {
+      const targets = (connectionsByOktaId.get(a.oktaAgentId!) || [])
+        .filter((c) => c.connectionType === 'IDENTITY_ASSERTION_A2A_SERVER' && c.status === 'ACTIVE')
+        .map((c) => c.resource?.orn?.split(':').pop())
+        .filter((id): id is string => !!id);
+      adjacency.set(a.oktaAgentId!, targets);
+    }
+    const reachable = new Set(directOktaIds);
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const [oktaId, targets] of adjacency) {
+        if (!reachable.has(oktaId) && targets.some((t) => reachable.has(t))) { reachable.add(oktaId); changed = true; }
+      }
+    }
+
+    const eligible = withAgentId.filter((a) => reachable.has(a.oktaAgentId!));
 
     const result = eligible.map((a) => ({ id: a.id, name: a.name, description: a.description }));
     eligibleAgentsCache = { value: result, expiresAt: Date.now() + 30_000 };
@@ -145,7 +169,44 @@ router.get('/:agentId/session/:loginRid', (req: Request, res: Response) => {
   // point of a live liveness check, so this bypasses res.json() entirely via res.end(), which
   // never generates an ETag or honors If-None-Match.
   res.type('application/json');
-  res.end(JSON.stringify({ valid }));
+  // login/tokenTrace let the frontend hydrate the read-only token-flow graph right after a login
+  // redirect or a page reload with a cached loginRid, without waiting for a chat message.
+  res.end(JSON.stringify(valid ? { valid, login: session!.login, tokenTrace: session!.tokenTrace } : { valid }));
+});
+
+// POST /api/chat/:agentId/session/:loginRid/logout — ends this one session server-side (this
+// login+scopeMode combination only; the other mode's session, if any, is untouched). The
+// frontend also clears its own sessionStorage entry, but that alone left the backend's session
+// alive — "switch mode" would find it still valid and silently resume it instead of really
+// logging out, which is the bug this closes.
+router.post('/:agentId/session/:loginRid/logout', (req: Request, res: Response) => {
+  const session = chatSessions.get(req.params.loginRid);
+  if (session && session.agentId === req.params.agentId) chatSessions.delete(req.params.loginRid);
+  res.json({ ok: true });
+});
+
+// GET /api/chat/:agentId/access-path — resolves and returns just the AGENT CHAIN shape (dashboard
+// ids/names only, no tokens) that a real chat message would use, via the exact same
+// resolveCampaignsAccessPath BFS. Lets the frontend render the full token-flow graph's nodes as
+// soon as an agent is selected, instead of only after the first real exchange — the chain itself
+// is static (driven by Okta connections, not by anything session-specific), so it's safe and cheap
+// to resolve ahead of any login.
+router.get('/:agentId/access-path', async (req: Request, res: Response) => {
+  try {
+    const agent = await store.findAgentById(req.params.agentId);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+
+    const settings = await store.getSettings();
+    if (!settings.campaignsAuthorizationServerId) return res.json({ agentChain: [] });
+    const campaignsAS = await okta.getAuthorizationServer(settings.campaignsAuthorizationServerId);
+    if (!campaignsAS.issuer) return res.json({ agentChain: [] });
+
+    const path = await resolveCampaignsAccessPath(agent, campaignsAS.issuer);
+    if (!path) return res.json({ agentChain: [] });
+    res.json({ agentChain: path.agentChain.map((a) => ({ agentId: a.id, agentName: a.name })) });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // POST /api/chat/:agentId/login/start — body { scopeMode: 'readonly' | 'full' }
@@ -218,7 +279,12 @@ router.get('/login/callback', async (req: Request, res: Response) => {
 
     pruneExpired(chatSessions, 60 * 60 * 1000);
     const rid = randomUUID();
-    chatSessions.set(rid, { agentId: pending.agentId, idToken: body.id_token, scopeMode: pending.scopeMode, createdAt: Date.now() });
+    const login: okta.ExerciseTokenResult = {
+      ok: true, status: 200,
+      decoded: { header: {}, payload: decodeIdToken(body.id_token) },
+      raw: { note: 'User login (ID token)' },
+    };
+    chatSessions.set(rid, { agentId: pending.agentId, idToken: body.id_token, scopeMode: pending.scopeMode, createdAt: Date.now(), login });
     res.redirect(`${FRONTEND_URL()}/chat?loginResult=${rid}&agentId=${pending.agentId}&scopeMode=${pending.scopeMode}`);
   } catch (e: any) {
     res.redirect(`${FRONTEND_URL()}/chat?loginError=${encodeURIComponent(e.message)}`);
@@ -254,29 +320,44 @@ async function ensureCallerCredential(agent: NonNullable<Awaited<ReturnType<type
 
 type DashboardAgent = NonNullable<Awaited<ReturnType<typeof store.findAgentById>>>;
 
-type CampaignsAccessPath =
-  | { kind: 'direct' }
-  | { kind: 'via-agent'; a2aConnection: okta.AgentConnection; secondaryAgent: DashboardAgent };
+// agentChain[0] is the primary agent; agentChain[i] reaches agentChain[i+1] via a2aConnections[i];
+// agentChain[last] is the one with the direct Marketing MCP connection. agentChain.length === 1
+// (a2aConnections === []) means the primary agent itself has the direct connection — the old
+// 'direct' case is just this loop terminating at depth 0.
+interface CampaignsAccessPath { agentChain: DashboardAgent[]; a2aConnections: okta.AgentConnection[]; }
 
-// Resolves how `agent` can reach the Campaigns MCP server: either it has a direct connection
-// (today's only path), or it has an ACTIVE agent-to-agent connection to some other onboarded
-// agent that itself has the direct connection — in which case the primary agent delegates to that
-// secondary agent, same one-hop-deep pattern exercise.ts's A2A branch already proves out. Returns
-// null if neither applies.
+const MAX_A2A_HOPS = 10;
+
+// Resolves how `agent` can reach the Campaigns MCP server: a breadth-first search over ACTIVE
+// agent-to-agent connections of any depth (capped at MAX_A2A_HOPS, with a visited set guarding
+// against cycles), stopping at the first agent found with a direct connection to campaignsIssuer.
+// Returns null if no such chain exists within the depth cap.
 async function resolveCampaignsAccessPath(agent: DashboardAgent, campaignsIssuer: string): Promise<CampaignsAccessPath | null> {
-  const connections = await okta.listAgentConnections(agent.oktaAgentId!);
-  if (hasDirectCampaignsConnection(connections, campaignsIssuer)) return { kind: 'direct' };
+  const startConnections = await okta.listAgentConnections(agent.oktaAgentId!);
+  if (hasDirectCampaignsConnection(startConnections, campaignsIssuer)) return { agentChain: [agent], a2aConnections: [] };
 
-  for (const c of connections) {
-    if (c.connectionType !== 'IDENTITY_ASSERTION_A2A_SERVER' || c.status !== 'ACTIVE') continue;
-    const targetOktaId = c.resource?.orn?.split(':').pop();
-    if (!targetOktaId) continue;
-    const secondaryAgent = await store.findAgentByOktaId(targetOktaId);
-    if (!secondaryAgent?.oktaAgentId) continue;
-    const secondaryConnections = await okta.listAgentConnections(secondaryAgent.oktaAgentId).catch(() => []);
-    if (hasDirectCampaignsConnection(secondaryConnections, campaignsIssuer)) {
-      return { kind: 'via-agent', a2aConnection: c, secondaryAgent };
+  interface QueueItem { connections: okta.AgentConnection[]; chain: DashboardAgent[]; links: okta.AgentConnection[]; }
+  let queue: QueueItem[] = [{ connections: startConnections, chain: [agent], links: [] }];
+  const visited = new Set<string>([agent.oktaAgentId!]);
+
+  for (let depth = 0; depth < MAX_A2A_HOPS && queue.length > 0; depth++) {
+    const nextQueue: QueueItem[] = [];
+    for (const item of queue) {
+      for (const c of item.connections) {
+        if (c.connectionType !== 'IDENTITY_ASSERTION_A2A_SERVER' || c.status !== 'ACTIVE') continue;
+        const targetOktaId = c.resource?.orn?.split(':').pop();
+        if (!targetOktaId || visited.has(targetOktaId)) continue;
+        visited.add(targetOktaId);
+        const nextAgent = await store.findAgentByOktaId(targetOktaId);
+        if (!nextAgent?.oktaAgentId) continue;
+        const nextConnections = await okta.listAgentConnections(nextAgent.oktaAgentId).catch(() => []);
+        const chain = [...item.chain, nextAgent];
+        const links = [...item.links, c];
+        if (hasDirectCampaignsConnection(nextConnections, campaignsIssuer)) return { agentChain: chain, a2aConnections: links };
+        nextQueue.push({ connections: nextConnections, chain, links });
+      }
     }
+    queue = nextQueue;
   }
   return null;
 }
@@ -350,50 +431,41 @@ router.post('/:agentId/message', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'This agent has no connection to the Campaigns authorization server, directly or through another agent — configure one from the Resources tab first' });
       }
 
-      let finalAccessToken: string;
-      if (path.kind === 'direct') {
-        const callerCred = await ensureCallerCredential(agent);
+      // One iteration per agent in the resolved chain — every hop but the last targets the NEXT
+      // agent in the chain (via its A2A connection's own resource/authorization server, no scope,
+      // matching Exercise's own A2A hop default of 'agent.invoke'); the last hop targets the
+      // Marketing MCP AS itself, with the real requested scope. Depth 0 (path.agentChain.length
+      // === 1, today's "direct" case) and depth 1 (today's "via-agent" case) are just this loop
+      // running once or twice — this produces the exact same Okta requests those two branches used to.
+      const hops: ChatHopTrace[] = [];
+      let subjectToken = subjectIdToken;
+      let subjectTokenType = 'urn:ietf:params:oauth:token-type:id_token';
+      let finalAccessToken = '';
 
-        const exchange = await okta.runIdJagExchange(
-          `${ORG()}/oauth2/v1/token`, agent.oktaAgentId, callerCred, subjectIdToken,
-          undefined, campaignsAS.issuer, 'urn:ietf:params:oauth:token-type:id_token', SCOPES_BY_MODE[session.scopeMode]
-        );
+      for (let i = 0; i < path.agentChain.length; i++) {
+        const hopAgent = path.agentChain[i];
+        const isLastHop = i === path.agentChain.length - 1;
+        const cred = await ensureCallerCredential(hopAgent);
+        const audience = isLastHop ? campaignsAS.issuer : path.a2aConnections[i].authorizationServer!.issuerUrl;
+        const resource = isLastHop ? undefined : path.a2aConnections[i].resourceIndicator;
+        const scope = isLastHop ? SCOPES_BY_MODE[session.scopeMode] : undefined;
+
+        const exchange = await okta.runIdJagExchange(`${ORG()}/oauth2/v1/token`, hopAgent.oktaAgentId!, cred, subjectToken, resource, audience, subjectTokenType, scope);
         if (!exchange.ok || !exchange.accessToken) return res.status(400).json({ error: exchange.raw?.error_description || exchange.raw?.error || 'Token exchange failed', step: exchange });
 
-        const redemption = await okta.runJwtBearerRedemption(`${campaignsAS.issuer}/v1/token`, agent.oktaAgentId, callerCred, exchange.accessToken);
+        const redemption = await okta.runJwtBearerRedemption(`${audience}/v1/token`, hopAgent.oktaAgentId!, cred, exchange.accessToken);
         if (!redemption.ok || !redemption.accessToken) return res.status(400).json({ error: redemption.raw?.error_description || redemption.raw?.error || 'Token redemption failed', step: redemption });
 
-        finalAccessToken = redemption.accessToken;
-        session.campaignsTokenExpiresAt = typeof redemption.decoded?.payload?.exp === 'number' ? redemption.decoded.payload.exp * 1000 : Date.now() + 60 * 60 * 1000;
-      } else {
-        // Hop 1 — primary agent delegates the human's identity to the secondary agent's own
-        // resource (agent.invoke, the same default scope Exercise's own A2A hop uses).
-        const primaryCred = await ensureCallerCredential(agent);
-        const hop1Exchange = await okta.runIdJagExchange(
-          `${ORG()}/oauth2/v1/token`, agent.oktaAgentId, primaryCred, subjectIdToken,
-          path.a2aConnection.resourceIndicator, path.a2aConnection.authorizationServer!.issuerUrl, 'urn:ietf:params:oauth:token-type:id_token'
-        );
-        if (!hop1Exchange.ok || !hop1Exchange.accessToken) return res.status(400).json({ error: hop1Exchange.raw?.error_description || hop1Exchange.raw?.error || 'Delegation exchange failed', step: hop1Exchange });
-
-        const hop1Redemption = await okta.runJwtBearerRedemption(`${path.a2aConnection.authorizationServer!.issuerUrl}/v1/token`, agent.oktaAgentId, primaryCred, hop1Exchange.accessToken);
-        if (!hop1Redemption.ok || !hop1Redemption.accessToken) return res.status(400).json({ error: hop1Redemption.raw?.error_description || hop1Redemption.raw?.error || 'Delegation redemption failed', step: hop1Redemption });
-
-        // Hop 2 — secondary agent, now authenticating as itself, redeems the hop-1 token for the
-        // real Campaigns access token on the primary's behalf.
-        const secondaryCred = await ensureCallerCredential(path.secondaryAgent);
-        const hop2Exchange = await okta.runIdJagExchange(
-          `${ORG()}/oauth2/v1/token`, path.secondaryAgent.oktaAgentId!, secondaryCred, hop1Redemption.accessToken,
-          undefined, campaignsAS.issuer, 'urn:ietf:params:oauth:token-type:access_token', SCOPES_BY_MODE[session.scopeMode]
-        );
-        if (!hop2Exchange.ok || !hop2Exchange.accessToken) return res.status(400).json({ error: hop2Exchange.raw?.error_description || hop2Exchange.raw?.error || 'Token exchange failed', step: hop2Exchange });
-
-        const hop2Redemption = await okta.runJwtBearerRedemption(`${campaignsAS.issuer}/v1/token`, path.secondaryAgent.oktaAgentId!, secondaryCred, hop2Exchange.accessToken);
-        if (!hop2Redemption.ok || !hop2Redemption.accessToken) return res.status(400).json({ error: hop2Redemption.raw?.error_description || hop2Redemption.raw?.error || 'Token redemption failed', step: hop2Redemption });
-
-        finalAccessToken = hop2Redemption.accessToken;
-        session.campaignsTokenExpiresAt = typeof hop2Redemption.decoded?.payload?.exp === 'number' ? hop2Redemption.decoded.payload.exp * 1000 : Date.now() + 60 * 60 * 1000;
+        hops.push({ agentId: hopAgent.id, agentName: hopAgent.name, exchange, redemption });
+        subjectToken = redemption.accessToken;
+        subjectTokenType = 'urn:ietf:params:oauth:token-type:access_token';
+        if (isLastHop) {
+          finalAccessToken = redemption.accessToken;
+          session.campaignsTokenExpiresAt = typeof redemption.decoded?.payload?.exp === 'number' ? redemption.decoded.payload.exp * 1000 : Date.now() + 60 * 60 * 1000;
+        }
       }
 
+      session.tokenTrace = { hops };
       accessToken = finalAccessToken;
       session.campaignsAccessToken = accessToken;
     }
@@ -426,7 +498,7 @@ CRITICAL FORMATTING RULE: The chat UI automatically renders a visual card for ev
         messages.push(response);
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
-          return res.json({ reply: response.content || 'I was unable to generate a response.', toolCalls });
+          return res.json({ reply: response.content || 'I was unable to generate a response.', toolCalls, tokenTrace: session.tokenTrace, login: session.login });
         }
 
         for (const call of response.tool_calls) {
@@ -442,7 +514,7 @@ CRITICAL FORMATTING RULE: The chat UI automatically renders a visual card for ev
         }
       }
 
-      res.json({ reply: 'I was unable to complete your request after multiple attempts. Please try again.', toolCalls });
+      res.json({ reply: 'I was unable to complete your request after multiple attempts. Please try again.', toolCalls, tokenTrace: session.tokenTrace, login: session.login });
     } finally {
       await mcpClient.close();
     }

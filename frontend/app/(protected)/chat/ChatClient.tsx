@@ -1,8 +1,11 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Send, RefreshCw, ChevronDown, ChevronRight, Bot, User, LogIn, Calendar, DollarSign } from 'lucide-react';
+import { Send, RefreshCw, ChevronDown, ChevronRight, Bot, User, LogIn, LogOut, Calendar, DollarSign } from 'lucide-react';
 import AgentCombobox from '@/components/AgentCombobox';
+import type { TokenResult } from '@/components/TokenStepCard';
+import ChatGraphPanel from './ChatGraphPanel';
+import type { ChatHopTrace } from './chatGraph';
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
@@ -68,7 +71,42 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  // The read-only token-flow graph's data — populated from /message's response on every send, and
+  // hydrated from /session/:loginRid whenever an existing session is resumed (page reload, mode
+  // switch) so the graph isn't blank until the next message.
+  const [loginInfo, setLoginInfo] = useState<TokenResult | null>(null);
+  const [tokenTrace, setTokenTrace] = useState<{ hops: ChatHopTrace[] } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Both panels' heights are user-resizable via the drag bar between them — chatHeight is the
+  // chat card's own height (its internal message list is flex-1, so it absorbs the change);
+  // graphCanvasHeight is just the React Flow canvas inside ChatGraphPanel, since that panel's
+  // header/inspector below it size themselves to content either way.
+  const [graphExpanded, setGraphExpanded] = useState(false);
+  const [chatHeight, setChatHeight] = useState(600);
+  const [graphCanvasHeight, setGraphCanvasHeight] = useState(260);
+  const resizeRef = useRef<{ startY: number; startChatHeight: number; startGraphHeight: number } | null>(null);
+
+  function startResize(e: React.MouseEvent) {
+    e.preventDefault();
+    resizeRef.current = { startY: e.clientY, startChatHeight: chatHeight, startGraphHeight: graphCanvasHeight };
+    function onMove(ev: MouseEvent) {
+      const drag = resizeRef.current;
+      if (!drag) return;
+      const delta = ev.clientY - drag.startY;
+      setChatHeight(Math.max(300, drag.startChatHeight + delta));
+      // With the panel collapsed there's no visible canvas to trade height with — just resize the
+      // chat card on its own; the canvas height still updates so it's not lost for next expand.
+      if (graphExpanded) setGraphCanvasHeight(Math.max(140, drag.startGraphHeight - delta));
+    }
+    function onUp() {
+      resizeRef.current = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -90,6 +128,7 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
         setActiveMode(mode);
         setLoginRid(result);
         setError('');
+        checkSessionValid(agentId, result);
       }
       router.replace('/chat');
       return;
@@ -114,6 +153,10 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     try {
       const res = await fetch(`${BACKEND}/api/chat/${agentId}/session/${rid}`);
       const data = await res.json();
+      if (data.valid) {
+        setLoginInfo(data.login ?? null);
+        setTokenTrace(data.tokenTrace ?? null);
+      }
       return !!data.valid;
     } catch {
       return false;
@@ -124,6 +167,7 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     setSelectedAgent(agent);
     setMessages([]);
     setError('');
+    setLoginInfo(null); setTokenTrace(null);
     // Prefer a full-access session if one already exists, else read-only, else none — either way
     // the login buttons below make it obvious which mode (if any) is actually active.
     const fullRid = getLoginRid(agent.id, 'full');
@@ -168,6 +212,22 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     login(mode);
   }
 
+  // Ends the active session both server-side (so a later switchMode/selectAgent can't silently
+  // resume it — checkSessionValid would otherwise still find it and treat it as "already logged
+  // in") and in sessionStorage, and clears everything the UI was showing for it.
+  async function logout() {
+    if (!selectedAgent || !activeMode || !loginRid) return;
+    try {
+      await fetch(`${BACKEND}/api/chat/${selectedAgent.id}/session/${loginRid}/logout`, { method: 'POST' });
+    } catch {}
+    sessionStorage.removeItem(`chat-login:${selectedAgent.id}:${activeMode}`);
+    setActiveMode(null);
+    setLoginRid(null);
+    setMessages([]);
+    setLoginInfo(null);
+    setTokenTrace(null);
+  }
+
   async function sendMessage() {
     if (!input.trim() || !selectedAgent || !loginRid || sending) return;
     const userMessage: Message = { role: 'user', content: input.trim() };
@@ -192,6 +252,8 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
         throw new Error(data.error || 'Chat request failed');
       }
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, toolCalls: data.toolCalls }]);
+      if (data.login) setLoginInfo(data.login);
+      if (data.tokenTrace) setTokenTrace(data.tokenTrace);
     } catch (e: any) {
       setError(e.message);
     }
@@ -199,78 +261,110 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
   }
 
   return (
-    <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl flex flex-col" style={{ height: 600 }}>
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)] rounded-t-xl">
-        <div className="w-64">
-          <AgentCombobox
-            agents={agents}
-            value={selectedAgent?.id || ''}
-            onSelect={selectAgent}
-            emptyMessage="No agents are connected to the Campaigns authorization server yet"
-          />
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          {selectedAgent && (['readonly', 'full'] as const).map((mode) => {
-            const hasSession = !!getLoginRid(selectedAgent.id, mode);
-            const isActive = activeMode === mode && !!loginRid;
-            return (
+    <div>
+      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl flex flex-col" style={{ height: chatHeight }}>
+        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)] rounded-t-xl">
+          <div className="w-64">
+            <AgentCombobox
+              agents={agents}
+              value={selectedAgent?.id || ''}
+              onSelect={selectAgent}
+              emptyMessage="No agents are connected to the Campaigns authorization server yet"
+            />
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {selectedAgent && (['readonly', 'full'] as const).map((mode) => {
+              const hasSession = !!getLoginRid(selectedAgent.id, mode);
+              const isActive = activeMode === mode && !!loginRid;
+              return (
+                <button
+                  key={mode}
+                  onClick={() => hasSession ? switchMode(mode) : login(mode)}
+                  disabled={loggingInMode !== null}
+                  className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
+                    isActive
+                      ? 'bg-[#1662dd] border-[#1662dd] text-white'
+                      : 'bg-[#1662dd]/15 border-[#1662dd]/25 text-[#1662dd] hover:bg-[#1662dd]/25'
+                  }`}
+                >
+                  {loggingInMode === mode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+                  {hasSession ? SCOPE_MODE_LABELS[mode] : `Log in — ${SCOPE_MODE_LABELS[mode]}`}
+                </button>
+              );
+            })}
+            {selectedAgent && activeMode && loginRid && (
               <button
-                key={mode}
-                onClick={() => hasSession ? switchMode(mode) : login(mode)}
-                disabled={loggingInMode !== null}
-                className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
-                  isActive
-                    ? 'bg-[#1662dd] border-[#1662dd] text-white'
-                    : 'bg-[#1662dd]/15 border-[#1662dd]/25 text-[#1662dd] hover:bg-[#1662dd]/25'
-                }`}
+                onClick={logout}
+                title="Log out of this session"
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-muted)] transition-colors"
               >
-                {loggingInMode === mode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
-                {hasSession ? SCOPE_MODE_LABELS[mode] : `Log in — ${SCOPE_MODE_LABELS[mode]}`}
+                <LogOut className="w-3.5 h-3.5" /> Log out
               </button>
-            );
-          })}
-          {sending && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
+            )}
+            {sending && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
+          </div>
+        </div>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+          {!selectedAgent ? (
+            <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
+              Select an agent above to start chatting
+            </div>
+          ) : !loginRid ? (
+            <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
+              Log in as {selectedAgent.name} (read-only or full access) to start chatting
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
+              Ask {selectedAgent.name} to create, search, read, update, or delete a marketing campaign
+              {activeMode === 'readonly' && ' (read-only session — writes will be rejected)'}
+            </div>
+          ) : (
+            messages.map((m, i) => <MessageBubble key={i} message={m} />)
+          )}
+        </div>
+
+        {error && <div className="px-4 py-2 text-xs text-red-600 bg-red-50 border-t border-red-200">{error}</div>}
+
+        <div className="p-3 border-t border-[var(--border-default)] flex items-center gap-2 rounded-b-xl">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+            disabled={!selectedAgent || !loginRid || sending}
+            placeholder={!selectedAgent ? 'Select an agent first' : !loginRid ? 'Log in first' : 'Type a message…'}
+            className="flex-1 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[#1662dd]/40 disabled:opacity-50"
+          />
+          <button
+            onClick={sendMessage}
+            disabled={!selectedAgent || !loginRid || !input.trim() || sending}
+            className="p-2 bg-[#1662dd] text-white rounded-lg hover:bg-[#1662dd]/90 transition-colors disabled:opacity-40"
+          >
+            <Send className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-        {!selectedAgent ? (
-          <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
-            Select an agent above to start chatting
+      {selectedAgent && (
+        <>
+          <div
+            onMouseDown={startResize}
+            title="Drag to resize"
+            className="group h-4 flex items-center justify-center cursor-row-resize"
+          >
+            <div className="w-10 h-1 rounded-full bg-[var(--border-default)] group-hover:bg-[#1662dd]/50 transition-colors" />
           </div>
-        ) : !loginRid ? (
-          <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
-            Log in as {selectedAgent.name} (read-only or full access) to start chatting
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
-            Ask {selectedAgent.name} to create, search, read, update, or delete a marketing campaign
-            {activeMode === 'readonly' && ' (read-only session — writes will be rejected)'}
-          </div>
-        ) : (
-          messages.map((m, i) => <MessageBubble key={i} message={m} />)
-        )}
-      </div>
-
-      {error && <div className="px-4 py-2 text-xs text-red-600 bg-red-50 border-t border-red-200">{error}</div>}
-
-      <div className="p-3 border-t border-[var(--border-default)] flex items-center gap-2 rounded-b-xl">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-          disabled={!selectedAgent || !loginRid || sending}
-          placeholder={!selectedAgent ? 'Select an agent first' : !loginRid ? 'Log in first' : 'Type a message…'}
-          className="flex-1 bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[#1662dd]/40 disabled:opacity-50"
-        />
-        <button
-          onClick={sendMessage}
-          disabled={!selectedAgent || !loginRid || !input.trim() || sending}
-          className="p-2 bg-[#1662dd] text-white rounded-lg hover:bg-[#1662dd]/90 transition-colors disabled:opacity-40"
-        >
-          <Send className="w-4 h-4" />
-        </button>
-      </div>
+          <ChatGraphPanel
+            agentId={selectedAgent.id}
+            login={loginInfo}
+            hops={tokenTrace?.hops || []}
+            scopeModeLabel={activeMode ? SCOPE_MODE_LABELS[activeMode] : ''}
+            expanded={graphExpanded}
+            onToggleExpanded={() => setGraphExpanded((v) => !v)}
+            canvasHeight={graphCanvasHeight}
+          />
+        </>
+      )}
     </div>
   );
 }

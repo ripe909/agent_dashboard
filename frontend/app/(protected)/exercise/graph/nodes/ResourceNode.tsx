@@ -28,6 +28,10 @@ interface AuthServerScopeProps {
   // means only those specific ones are. Drives the checklist's default pre-selection.
   scopeCondition?: string;
   allowedScopes?: string[];
+  // Read-only consumers (e.g. Chat's token-flow panel) have a fixed, backend-determined scope —
+  // there's nothing to pick, so the checklist (and its own live scope-catalog fetch) is skipped
+  // entirely. The node's existing `sub` line is used instead to show the actual scopes as text.
+  readOnly?: boolean;
 }
 
 // Real scopes defined on this specific authorization server, fetched live — not every Custom AS
@@ -127,7 +131,7 @@ export default function ResourceNode({
           {data.sub && <div className="text-[11px] text-[var(--text-muted)] truncate">{data.sub}</div>}
         </div>
       </div>
-      {isAuthServer && (
+      {isAuthServer && !data.readOnly && (
         <AuthServerScopes
           agentId={data.agentId}
           authServerId={data.authServerId}
