@@ -158,15 +158,23 @@ router.post('/onboard', async (req: Request, res: Response) => {
     // auto-provisioned client secret instead. Only native agents (no backing app) can
     // honor a private_key_jwt request, since createAgentJwk generates and registers a
     // real keypair server-side with no manual step.
+    // Okta only ever returns a freshly-minted secret/key once, on the response that creates it —
+    // persisting it here is the ONLY way it survives past this request. Without this, every
+    // caller that later needs this agent's credential (Chat's ensureCallerCredential, Exercise's
+    // resolveCallerCred) finds nothing locally and mints ANOTHER fresh secret on every use,
+    // eventually hitting Okta's per-client secret cap (confirmed live).
     let issuedNote: string;
     if (backingAppId) {
-      await okta.setAgentAuthMethod(backingAppId, 'client_secret_basic');
+      const result = await okta.setAgentAuthMethod(backingAppId, 'client_secret_basic');
+      if (result.clientSecret) await store.updateAgentById(localAgentId, { testClientSecret: result.clientSecret });
       issuedNote = 'Client secret issued';
     } else if (credentialType === 'private_key_jwt') {
-      await okta.createAgentJwk(oktaAgentId);
+      const { kid, privateKeyPem } = await okta.createAgentJwk(oktaAgentId);
+      await store.updateAgentById(localAgentId, { testPrivateKeyPem: privateKeyPem, testPrivateKeyKid: kid });
       issuedNote = 'No shared secret transmitted';
     } else {
-      await okta.createAgentSecret(oktaAgentId);
+      const { clientSecret } = await okta.createAgentSecret(oktaAgentId);
+      await store.updateAgentById(localAgentId, { testClientSecret: clientSecret });
       issuedNote = 'Client secret issued';
     }
     emitMilestone('Credentials issued', issuedNote);
@@ -181,7 +189,29 @@ router.post('/onboard', async (req: Request, res: Response) => {
     // distinct potential connections can share the same authorization server ORN, so
     // matching by ORN alone can silently grab the wrong one.
     for (const connection of connections || []) {
-      await okta.createAgentConnection(oktaAgentId, connection);
+      const created = await okta.createAgentConnection(oktaAgentId, connection);
+
+      // An A2A connection only authorizes this NEW agent's own side (as a caller) — Okta also
+      // requires a reciprocal delegation link on the TARGET agent's side before the target will
+      // actually accept a call from this one. connections.ts's admin-dashboard POST /connections
+      // route already does this same reciprocal step for the exact same connection type; the
+      // wizard was missing it, leaving new agents unable to actually call the A2A target they
+      // were just connected to.
+      if (created.connectionType === 'IDENTITY_ASSERTION_A2A_SERVER' && created.resource?.orn && created.authorizationServer?.orn) {
+        try {
+          const callerOktaAgent = await okta.getAIAgent(oktaAgentId);
+          const callerOrn = okta.agentOrnFromLinks(callerOktaAgent._links);
+          const targetAgentId = created.resource.orn.split(':').pop();
+          const targetOktaAgent = targetAgentId ? await okta.getAIAgent(targetAgentId) : null;
+          const targetOrn = targetOktaAgent ? okta.agentOrnFromLinks(targetOktaAgent._links) : '';
+          if (callerOrn && targetOrn) {
+            await okta.createDelegationLink(callerOrn, targetOrn, created.authorizationServer.orn);
+          }
+        } catch (e: any) {
+          emitError('Connected to resource', `Connection created, but failed to also authorize this as a Machine Access caller: ${e.message}`);
+        }
+      }
+
       // For A2A connections, the target agent's own name (resource.name) is the meaningful
       // label — the shared authorizationServer.name (e.g. "ProGear Pricing API") would be
       // misleading here, since several distinct A2A targets can front the same auth server.
@@ -195,7 +225,19 @@ router.post('/onboard', async (req: Request, res: Response) => {
     return res.status(500).json({ error: e.message, agentId: localAgentId });
   }
 
-  // 7. Final — agent is fully live
+  // 7. Activate — a newly created agent starts STAGED. The User Access path happens to leave it
+  // ACTIVE as a side effect of provisioning the backing app, but a Machine-Access-only agent (no
+  // backing app) has no such side effect and stays STAGED forever unless explicitly activated
+  // (confirmed live — activateAIAgent moves it to ACTIVE regardless of access pattern).
+  try {
+    const activated = await okta.activateAIAgent(oktaAgentId);
+    await store.updateAgentById(localAgentId, { status: (activated.status || 'active').toLowerCase() });
+  } catch (e: any) {
+    emitError('Agent live in Okta\'s AI Agent directory', `Provisioning finished, but activation failed: ${e.message}`);
+    return res.status(500).json({ error: e.message, agentId: localAgentId });
+  }
+
+  // 8. Final — agent is fully live
   try {
     const adminConsoleUrl = await okta.getAgentAdminUrl(oktaAgentId);
     emitMilestone('Agent live in Okta\'s AI Agent directory', name.trim());

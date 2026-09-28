@@ -106,7 +106,22 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, agents]);
 
-  function selectAgent(agent: AgentOption) {
+  // A loginRid cached in sessionStorage can outlive the backend's own in-memory session for it —
+  // e.g. a backend restart wipes chatSessions entirely, but sessionStorage still says "logged in".
+  // Without checking, the UI would show a plain mode-switch button (no network call at all) that
+  // silently does nothing forever, since switchMode never talks to the backend. Verifying first
+  // means a stale rid always falls back to a real "Log in" click instead of a dead button.
+  async function checkSessionValid(agentId: string, rid: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${BACKEND}/api/chat/${agentId}/session/${rid}`);
+      const data = await res.json();
+      return !!data.valid;
+    } catch {
+      return false;
+    }
+  }
+
+  async function selectAgent(agent: AgentOption) {
     setSelectedAgent(agent);
     setPickerOpen(false);
     setMessages([]);
@@ -115,9 +130,11 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     // the login buttons below make it obvious which mode (if any) is actually active.
     const fullRid = getLoginRid(agent.id, 'full');
     const readonlyRid = getLoginRid(agent.id, 'readonly');
-    if (fullRid) { setActiveMode('full'); setLoginRid(fullRid); }
-    else if (readonlyRid) { setActiveMode('readonly'); setLoginRid(readonlyRid); }
-    else { setActiveMode(null); setLoginRid(null); }
+    if (fullRid && await checkSessionValid(agent.id, fullRid)) { setActiveMode('full'); setLoginRid(fullRid); return; }
+    if (fullRid) sessionStorage.removeItem(`chat-login:${agent.id}:full`);
+    if (readonlyRid && await checkSessionValid(agent.id, readonlyRid)) { setActiveMode('readonly'); setLoginRid(readonlyRid); return; }
+    if (readonlyRid) sessionStorage.removeItem(`chat-login:${agent.id}:readonly`);
+    setActiveMode(null); setLoginRid(null);
   }
 
   async function login(mode: ScopeMode) {
@@ -137,12 +154,20 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     }
   }
 
-  function switchMode(mode: ScopeMode) {
+  async function switchMode(mode: ScopeMode) {
     if (!selectedAgent) return;
     const rid = getLoginRid(selectedAgent.id, mode);
-    setActiveMode(mode);
-    setLoginRid(rid);
-    setMessages([]);
+    if (rid && await checkSessionValid(selectedAgent.id, rid)) {
+      setActiveMode(mode);
+      setLoginRid(rid);
+      setMessages([]);
+      return;
+    }
+    // Stale — the cached rid no longer maps to a real backend session. Clear it and fall through
+    // to a real login instead of leaving the button looking clickable but doing nothing.
+    if (rid) sessionStorage.removeItem(`chat-login:${selectedAgent.id}:${mode}`);
+    setActiveMode(null); setLoginRid(null);
+    login(mode);
   }
 
   async function sendMessage() {

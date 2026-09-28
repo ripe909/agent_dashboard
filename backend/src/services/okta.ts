@@ -771,16 +771,46 @@ export async function createAgentSecret(agentId: string): Promise<{ id: string; 
     });
     if (!putRes.ok) throw new Error(`switchClientAuthMethod ${putRes.status}: ${await putRes.text()}`);
     const updated = await putRes.json() as any;
-    if (!updated.client_secret) throw new Error('Switching auth method did not return a client_secret');
-    return { id: agentId, clientSecret: updated.client_secret, status: 'ACTIVE' };
+    // Confirmed live: Okta only includes client_secret in the PUT response when the auth method
+    // actually CHANGES — a concurrent call (or any prior one) that already flipped it to
+    // client_secret_basic between our GET above and this PUT makes it a no-op, 200 with no secret.
+    // Rather than fail outright, fall through to the POST-a-secret branch below, which is exactly
+    // the right thing to do once the client is confirmed to already be on client_secret_basic.
+    if (updated.client_secret) return { id: agentId, clientSecret: updated.client_secret, status: 'ACTIVE' };
   }
 
   const res = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets`, {
     method: 'POST', body: JSON.stringify({}),
   });
-  if (!res.ok) throw new Error(`createAgentSecret ${res.status}: ${await res.text()}`);
-  const data = await res.json() as any;
-  return { id: data.id, clientSecret: data.client_secret, status: data.status };
+  if (res.ok) {
+    const data = await res.json() as any;
+    return { id: data.id, clientSecret: data.client_secret, status: data.status };
+  }
+
+  // Okta caps the number of secrets per client (confirmed live: "You have reached the maximum
+  // number of client secrets per client.") — an agent repeatedly used for a test flow that mints a
+  // fresh secret every time it lacks a LOCALLY stored one (e.g. Chat's ensureCallerCredential
+  // before this fix, or manual testing against the same agent) hits this quickly. Recover by
+  // retiring the oldest secret (deactivate is required before delete, same as connections) and
+  // retrying once, rather than leaving the caller stuck.
+  const errText = await res.text();
+  if (res.status === 400 && errText.includes('maximum number of client secrets')) {
+    const existing = await listAgentSecrets(agentId);
+    const oldest = existing.filter((s) => s.status === 'ACTIVE').sort((a, b) => a.created.localeCompare(b.created))[0];
+    if (oldest) {
+      await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets/${oldest.id}/lifecycle/deactivate`, { method: 'POST' });
+      await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets/${oldest.id}`, { method: 'DELETE' });
+      const retryRes = await sswsFetch(`/workload-principals/api/v1/ai-agents/${agentId}/credentials/secrets`, {
+        method: 'POST', body: JSON.stringify({}),
+      });
+      if (retryRes.ok) {
+        const data = await retryRes.json() as any;
+        return { id: data.id, clientSecret: data.client_secret, status: data.status };
+      }
+      throw new Error(`createAgentSecret ${retryRes.status}: ${await retryRes.text()}`);
+    }
+  }
+  throw new Error(`createAgentSecret ${res.status}: ${errText}`);
 }
 
 export async function createAgentJwk(agentId: string): Promise<{ kid: string; privateKeyPem: string }> {
@@ -841,6 +871,10 @@ export async function setAgentAuthMethod(appId: string, authMethod: string): Pro
     clientId: creds.client_id || appId,
     authMethod: creds.token_endpoint_auth_method,
     hasSecret: authMethod !== 'none' && authMethod !== 'private_key_jwt',
+    // Present in Okta's PUT response the same way rotateAppSecret's already is — surfaced here so
+    // callers that just switched an agent to client_secret_basic can persist it immediately
+    // instead of it only being shown once and then lost.
+    clientSecret: creds.client_secret,
   };
 }
 

@@ -131,6 +131,23 @@ router.get('/eligible-agents', async (_req: Request, res: Response) => {
   }
 });
 
+// GET /api/chat/:agentId/session/:loginRid — lets the frontend check whether a loginRid it has
+// cached in sessionStorage is still valid before trusting it (e.g. after a backend restart wipes
+// the in-memory chatSessions map — sessionStorage would otherwise still claim "already logged in"
+// with no way to detect that and no network request ever firing to reveal it).
+router.get('/:agentId/session/:loginRid', (req: Request, res: Response) => {
+  const session = chatSessions.get(req.params.loginRid);
+  const valid = !!session && session.agentId === req.params.agentId;
+  // res.json()/res.send() compute an ETag and honor If-None-Match automatically — confirmed live,
+  // a Cache-Control: no-store header alone does NOT stop that, since Express's freshness check
+  // (res.send's internal fresh()) runs independently of Cache-Control and still returns a bare 304
+  // reusing whatever "valid" value the browser cached from the FIRST check. That defeats the whole
+  // point of a live liveness check, so this bypasses res.json() entirely via res.end(), which
+  // never generates an ETag or honors If-None-Match.
+  res.type('application/json');
+  res.end(JSON.stringify({ valid }));
+});
+
 // POST /api/chat/:agentId/login/start — body { scopeMode: 'readonly' | 'full' }
 router.post('/:agentId/login/start', async (req: Request, res: Response) => {
   try {
