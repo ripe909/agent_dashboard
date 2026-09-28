@@ -9,7 +9,10 @@ import type { GraphNode, GraphEdge, GraphNodeData } from '../exercise/graph/grap
 // fetchNeighbors graph. So this builds the fixed shape directly from the trace instead of
 // fetching/expanding anything.
 
-export interface ChatHopTrace { agentId: string; agentName: string; exchange: TokenResult; redemption: TokenResult; }
+// redemption is absent when the exchange itself failed — that hop never got far enough to redeem
+// anything, but it's still recorded so the graph can show a red error chip on the exact hop that
+// failed instead of the whole trace disappearing.
+export interface ChatHopTrace { agentId: string; agentName: string; exchange: TokenResult; redemption?: TokenResult; }
 export interface ChatAgentChainEntry { agentId: string; agentName: string; }
 
 const ORIGIN_NODE_ID = 'chat-origin';
@@ -98,6 +101,9 @@ export function deriveChatChips(
     const nodeId = agentIds[i];
     const targetNodeId = i < agentIds.length - 1 ? agentIds[i + 1] : RESOURCE_NODE_ID;
     const exchangeHop: HopResult = { label: `Exchange → ${i < hops.length - 1 ? hops[i + 1].agentName : 'Marketing MCP'}`, result: h.exchange, tokenType: 'JAG' };
+    // No redemption means the exchange itself failed — only show the (red) exchange chip, nothing
+    // downstream ever received a token from this hop.
+    if (!h.redemption) { hopsByNodeId.set(nodeId, [exchangeHop]); return; }
     const redemptionHop: HopResult = { label: `Redeem — ${h.agentName}`, result: h.redemption, tokenType: 'AT' };
     hopsByNodeId.set(nodeId, [exchangeHop, redemptionHop]);
     incomingByNodeId[targetNodeId] = redemptionHop;

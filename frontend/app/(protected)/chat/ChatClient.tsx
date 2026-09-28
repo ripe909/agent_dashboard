@@ -205,6 +205,11 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
   // cached trace exists, without requiring a new message.
   async function selectMode(mode: ScopeMode) {
     setSelectedMode(mode);
+    // Clear immediately rather than waiting on the check below — the other mode's trace belongs
+    // to a different scope's exchange entirely, so showing it while this mode's own state loads
+    // would be misleading. checkSessionValid repopulates it right after, if this mode already has
+    // a cached trace; otherwise it stays cleared until the next message.
+    setTokenTrace(null);
     if (!selectedAgent || !loginRid) return;
     checkSessionValid(selectedAgent.id, loginRid, mode);
   }
@@ -255,6 +260,11 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update kill switch');
       setKillSwitchActive(!!data.killSwitchActive);
+      // Revoking invalidates the backend's cached token for this agent (see
+      // invalidateCachedTokensForAgent) — the trace shown here is from before that happened, so
+      // it no longer reflects reality. Clear it rather than leave a stale success trace on screen
+      // while the banner says access is revoked.
+      if (data.killSwitchActive) setTokenTrace(null);
     } catch (e: any) {
       setError(e.message);
     }
@@ -277,6 +287,11 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
         body: JSON.stringify({ loginRid, message: userMessage.content, history, scopeMode: selectedMode }),
       });
       const data = await res.json();
+      // Captured before the throw below — a failed exchange/redemption still returns a trace with
+      // that hop's red error chip recorded, so the graph shows exactly where the chain broke
+      // instead of going blank on any error.
+      if (data.login) setLoginInfo(data.login);
+      if (data.tokenTrace) setTokenTrace(data.tokenTrace);
       if (!res.ok) {
         if (data.requiresLogin && selectedAgent) {
           sessionStorage.removeItem(`chat-login:${selectedAgent.id}`);
@@ -285,8 +300,6 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
         throw new Error(data.error || 'Chat request failed');
       }
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, toolCalls: data.toolCalls }]);
-      if (data.login) setLoginInfo(data.login);
-      if (data.tokenTrace) setTokenTrace(data.tokenTrace);
     } catch (e: any) {
       setError(e.message);
     }
@@ -297,13 +310,16 @@ export default function ChatClient({ agents }: { agents: AgentOption[] }) {
     <div>
       <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl flex flex-col" style={{ height: chatHeight }}>
         <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)] rounded-t-xl">
-          <div className="w-64">
-            <AgentCombobox
-              agents={agents}
-              value={selectedAgent?.id || ''}
-              onSelect={selectAgent}
-              emptyMessage="No agents are connected to the Campaigns authorization server yet"
-            />
+          <div className="flex items-center gap-2 w-72">
+            <span className="text-xs font-semibold text-[var(--text-secondary)] flex-shrink-0">Agent</span>
+            <div className="flex-1 min-w-0">
+              <AgentCombobox
+                agents={agents}
+                value={selectedAgent?.id || ''}
+                onSelect={selectAgent}
+                emptyMessage="No agents are connected to the Campaigns authorization server yet"
+              />
+            </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
             {selectedAgent && (

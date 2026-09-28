@@ -372,8 +372,11 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
     <div className="space-y-4">
       <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl" style={{ height: 560 }}>
         <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border-default)] rounded-t-xl">
-          <div className="w-64">
-            <AgentCombobox agents={agents} value={centerAgentId} onSelect={(a) => loadCenter(a.id)} />
+          <div className="flex items-center gap-2 w-72">
+            <span className="text-xs font-semibold text-[var(--text-secondary)] flex-shrink-0">Agent</span>
+            <div className="flex-1 min-w-0">
+              <AgentCombobox agents={agents} value={centerAgentId} onSelect={(a) => loadCenter(a.id)} />
+            </div>
           </div>
           {loadingInitial && <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-secondary)]" />}
         </div>

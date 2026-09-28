@@ -48,7 +48,10 @@ const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; c
 // but the last targets the next agent in the chain, the last targets the Marketing MCP AS itself.
 // Exposed to the frontend (via /message and /session/:loginRid) purely for the read-only graph
 // panel — never drives anything server-side beyond what campaignsAccessToken already does.
-interface ChatHopTrace { agentId: string; agentName: string; exchange: okta.ExerciseTokenResult; redemption: okta.ExerciseTokenResult; }
+// redemption is optional because a hop whose EXCHANGE itself failed never reaches redemption at
+// all — the trace still records that hop (with just the failed exchange) so the graph's red error
+// chip lands on the exact hop that failed, instead of the whole trace vanishing on any error.
+interface ChatHopTrace { agentId: string; agentName: string; exchange: okta.ExerciseTokenResult; redemption?: okta.ExerciseTokenResult; }
 interface ChatTokenTrace { hops: ChatHopTrace[]; }
 
 interface ChatSession {
@@ -497,10 +500,18 @@ router.post('/:agentId/message', async (req: Request, res: Response) => {
         const scope = isLastHop ? SCOPES_BY_MODE[scopeMode] : undefined;
 
         const exchange = await okta.runIdJagExchange(`${ORG()}/oauth2/v1/token`, hopAgent.oktaAgentId!, cred, subjectToken, resource, audience, subjectTokenType, scope);
-        if (!exchange.ok || !exchange.accessToken) return res.status(400).json({ error: exchange.raw?.error_description || exchange.raw?.error || 'Token exchange failed', step: exchange });
+        if (!exchange.ok || !exchange.accessToken) {
+          hops.push({ agentId: hopAgent.id, agentName: hopAgent.name, exchange });
+          session.tokenTraceByMode[scopeMode] = { hops };
+          return res.status(400).json({ error: exchange.raw?.error_description || exchange.raw?.error || 'Token exchange failed', step: exchange, tokenTrace: session.tokenTraceByMode[scopeMode], login: session.login });
+        }
 
         const redemption = await okta.runJwtBearerRedemption(`${audience}/v1/token`, hopAgent.oktaAgentId!, cred, exchange.accessToken);
-        if (!redemption.ok || !redemption.accessToken) return res.status(400).json({ error: redemption.raw?.error_description || redemption.raw?.error || 'Token redemption failed', step: redemption });
+        if (!redemption.ok || !redemption.accessToken) {
+          hops.push({ agentId: hopAgent.id, agentName: hopAgent.name, exchange, redemption });
+          session.tokenTraceByMode[scopeMode] = { hops };
+          return res.status(400).json({ error: redemption.raw?.error_description || redemption.raw?.error || 'Token redemption failed', step: redemption, tokenTrace: session.tokenTraceByMode[scopeMode], login: session.login });
+        }
 
         hops.push({ agentId: hopAgent.id, agentName: hopAgent.name, exchange, redemption });
         subjectToken = redemption.accessToken;
