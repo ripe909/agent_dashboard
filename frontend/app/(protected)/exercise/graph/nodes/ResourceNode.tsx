@@ -23,13 +23,21 @@ interface AuthServerScopeProps {
   authServerId?: string;
   selectedScopes?: string[];
   onScopesChange?: (scopes: string[]) => void;
+  // The calling agent's own grant on this connection (from ResourceNodeData) — undefined/
+  // 'ALL_SCOPES' means every scope in the catalog is allowed, 'INCLUDE_ONLY' + allowedScopes
+  // means only those specific ones are. Drives the checklist's default pre-selection.
+  scopeCondition?: string;
+  allowedScopes?: string[];
 }
 
 // Real scopes defined on this specific authorization server, fetched live — not every Custom AS
 // defines 'agent.invoke' (e.g. MARKETING MCP only has api.read/api.search/etc), so the exchange
 // this node triggers needs to request a scope that actually exists on ITS OWN authorization
-// server, not a hardcoded guess. Defaults to 'agent.invoke' if present, else the first scope.
-function AuthServerScopes({ agentId, authServerId, selectedScopes, onScopesChange }: AuthServerScopeProps) {
+// server, not a hardcoded guess. Defaults to every scope the calling agent's own connection
+// actually allows (its scopeCondition/allowedScopes) — all of the catalog for ALL_SCOPES, or the
+// intersection with the catalog for INCLUDE_ONLY — rather than guessing 'agent.invoke' or the
+// first scope, since the agent may not be granted every scope the AS happens to define.
+function AuthServerScopes({ agentId, authServerId, selectedScopes, onScopesChange, scopeCondition, allowedScopes }: AuthServerScopeProps) {
   const [scopes, setScopes] = useState<ScopeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const defaulted = selectedScopes !== undefined && selectedScopes.length > 0;
@@ -43,8 +51,10 @@ function AuthServerScopes({ agentId, authServerId, selectedScopes, onScopesChang
         const list = Array.isArray(d) ? d : [];
         setScopes(list);
         if (!defaulted && onScopesChange && list.length > 0) {
-          const agentInvoke = list.find((s) => s.name === 'agent.invoke');
-          onScopesChange([agentInvoke ? agentInvoke.name : list[0].name]);
+          const allowedNames = scopeCondition === 'INCLUDE_ONLY' && allowedScopes
+            ? list.filter((s) => allowedScopes.includes(s.name)).map((s) => s.name)
+            : list.map((s) => s.name);
+          onScopesChange(allowedNames.length > 0 ? allowedNames : [list[0].name]);
         }
       })
       .catch(() => setScopes([]))
@@ -105,7 +115,7 @@ export default function ResourceNode({
         data.selected ? 'border-[#1662dd] ring-2 ring-[#1662dd]/30' : 'border-[var(--border-default)] hover:border-[#1662dd]/40'
       }`}
     >
-      <TokenIcons hops={data.hops} onInspect={data.onInspect} />
+      <TokenIcons hops={data.hops} incoming={data.incoming} onInspect={data.onInspect} />
       <Handle type="target" position={Position.Left} className="!bg-[var(--border-default)]" />
       <div className="flex items-center gap-2">
         <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${style.colour}1a` }}>
@@ -123,6 +133,8 @@ export default function ResourceNode({
           authServerId={data.authServerId}
           selectedScopes={data.selectedScopes}
           onScopesChange={data.onScopesChange}
+          scopeCondition={data.scopeCondition}
+          allowedScopes={data.allowedScopes}
         />
       )}
     </div>

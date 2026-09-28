@@ -16,7 +16,7 @@ export default function OriginNode({ data }: NodeProps & { data: OriginNodeData 
         data.selected ? 'border-[#1662dd] ring-2 ring-[#1662dd]/30' : 'border-[var(--border-default)] hover:border-[#1662dd]/40'
       }`}
     >
-      <TokenIcons hops={data.hops} onInspect={data.onInspect} />
+      <TokenIcons hops={data.hops} incoming={data.incoming} onInspect={data.onInspect} />
       <Handle type="source" position={Position.Right} className="!bg-[var(--border-default)]" />
       <div className="flex items-center gap-2">
         <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${colour}1a` }}>

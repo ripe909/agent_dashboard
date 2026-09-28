@@ -77,16 +77,22 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // pathNodeIds[i] is the node steps[i]'s token belongs to — a node can now accumulate more than
-  // one hop (e.g. the caller in a split exchange/redeem gets both its arrival token and its
-  // outgoing exchange's id-jag), so this groups rather than overwriting by node id.
+  // pathNodeIds[i] is the node steps[i]'s token belongs to — a node can accumulate more than one
+  // hop (e.g. the caller in a split exchange/redeem gets both its arrival token and its outgoing
+  // exchange's id-jag), so this groups by node id. Within a node, keyed by tokenType so retrying
+  // the same kind of request (e.g. re-running a failed exchange) replaces its chip instead of
+  // stacking a new one — a node should only ever show one AT/ID/JAG chip at a time.
   const hopByNodeId = useMemo(() => {
-    const map = new Map<string, (typeof runner.steps)>();
+    const byType = new Map<string, Map<string, (typeof runner.steps)[number]>>();
     runner.pathNodeIds.forEach((nodeId, i) => {
-      if (!runner.steps[i]) return;
-      const existing = map.get(nodeId) || [];
-      map.set(nodeId, [...existing, runner.steps[i]]);
+      const hop = runner.steps[i];
+      if (!hop) return;
+      const existing = byType.get(nodeId) || new Map<string, (typeof runner.steps)[number]>();
+      existing.set(hop.tokenType, hop);
+      byType.set(nodeId, existing);
     });
+    const map = new Map<string, (typeof runner.steps)>();
+    byType.forEach((types, nodeId) => map.set(nodeId, Array.from(types.values())));
     return map;
   }, [runner.pathNodeIds, runner.steps]);
 
@@ -272,6 +278,7 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
             selected,
             onSelect: () => handleNodeClick(n),
             hops: hopByNodeId.get(n.id),
+            incoming: runner.incomingByNodeId[n.id],
             onInspect: inspectToken,
             ...(isAgent ? { expanded: expandedIds.has(n.id), expanding: expandingId === n.id, onExpand: () => expandAgent((n.data as AgentNodeData).dashboardId, n.id) } : {}),
             ...(isAuthServer ? {
@@ -296,7 +303,7 @@ function ExerciseGraphInner({ agents }: { agents: AgentOption[] }) {
       })
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutedNodes, rawEdges, expandedIds, expandingId, runner.currentNodeId, hopByNodeId, highlightSources, traveledEdgeIds, selectedScopesByNodeId, centerAgentId]);
+  }, [layoutedNodes, rawEdges, expandedIds, expandingId, runner.currentNodeId, hopByNodeId, runner.incomingByNodeId, highlightSources, traveledEdgeIds, selectedScopesByNodeId, centerAgentId]);
 
   // Click model (4 clicks for a 3-hop chain — service app, EC10, ET10, authz server):
   // 1. Click the "start here" node (app/origin) → gets the initial token, lands on the first agent.

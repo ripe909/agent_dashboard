@@ -21,6 +21,12 @@ export interface ResourceNodeData {
   // scope catalog for the graph's per-node scope checklist. Parsed from authorizationServer.orn
   // the same way components/ScopeSelector.tsx already does.
   authServerId?: string;
+  // The calling agent's own grant on THIS connection — undefined/'ALL_SCOPES' means every scope
+  // in the AS's catalog is allowed, 'INCLUDE_ONLY' + allowedScopes means only those specific ones
+  // are. Used to default the checklist's pre-selection to what the agent can actually request,
+  // instead of a fixed 'agent.invoke'-or-first-scope guess.
+  scopeCondition?: string;
+  allowedScopes?: string[];
 }
 // User Access has no distinct app-caller identity in this codebase's model (it's the agent's own
 // backing OIDC client, not a delegation-link caller) so it still needs a synthetic origin node —
@@ -138,6 +144,8 @@ export async function fetchNeighbors(dashboardAgentId: string, agents: AgentOpti
           sub: c.authorizationServer?.name && resourceTypeId !== 'auth_server' ? `via ${c.authorizationServer.name}` : undefined,
           scopeCount: Array.isArray(c.scopes) && !c.scopes.includes('*') ? c.scopes.length : undefined,
           authServerId: c.authorizationServer?.orn?.split(':').pop(),
+          scopeCondition: c.scopeCondition,
+          allowedScopes: c.scopeCondition === 'INCLUDE_ONLY' ? c.scopes : undefined,
         },
       });
       const label = c.scopes && Array.isArray(c.scopes) && !c.scopes.includes('*') ? `${c.scopes.length} scopes` : undefined;

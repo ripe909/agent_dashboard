@@ -19,7 +19,7 @@ export default function AgentNode({ data }: NodeProps & { data: AgentNodeData & 
         data.selected ? 'border-[#1662dd] ring-2 ring-[#1662dd]/30' : 'border-[var(--border-default)] hover:border-[#1662dd]/40'
       }`}
     >
-      <TokenIcons hops={data.hops} onInspect={data.onInspect} />
+      <TokenIcons hops={data.hops} incoming={data.incoming} onInspect={data.onInspect} />
       <Handle type="target" position={Position.Left} className="!bg-[var(--border-default)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--border-default)]" />
       <div className="flex items-center gap-2">

@@ -41,6 +41,12 @@ export function usePathRunner() {
   // node for steps[0]; the CALLER node for an exchange; the TARGET node for a redemption). Lets
   // ExerciseGraph.tsx attach request/response icons to the specific node each token belongs to.
   const [pathNodeIds, setPathNodeIds] = useState<string[]>([]);
+  // Keyed by the node the token actually LANDED on (not the node that produced it) — the AT/ID
+  // that node received from whatever the previous hop was, so the graph can show a "here's what
+  // was passed into you" chip distinct from that node's own outgoing request/response icons.
+  // Only ever one entry per node (overwritten on retry), and only set on success — a failed hop
+  // never delivers a token anywhere.
+  const [incomingByNodeId, setIncomingByNodeId] = useState<Record<string, HopResult>>({});
   // Ordered list of graph node ids the path's "current position" has actually occupied, in visit
   // order (start node, then wherever each successful redeem/login lands) — distinct from
   // pathNodeIds above, which can repeat the same node (exchange + redeem both attach to the
@@ -54,6 +60,7 @@ export function usePathRunner() {
     setCurrentNodeId(null); setActingAgentId(null); setRid(null);
     setAwaitingLogin(false); setComplete(false); setPendingExchange(null);
     setSteps([]); setPathNodeIds([]); setVisitedNodeIds([]); setError('');
+    setIncomingByNodeId({});
   }, []);
 
   // Triggered by clicking the service-client app node (AppNode.tsx, isMachineOrigin) — that node
@@ -77,6 +84,7 @@ export function usePathRunner() {
         setRunning(false);
         return;
       }
+      setIncomingByNodeId({ [agentNodeId]: { label: 'Service Client Grant', result: step1, tokenType: 'AT' } });
       setCurrentNodeId(agentNodeId);
       setVisitedNodeIds([appNodeId, agentNodeId]);
       setActingAgentId(agentDashboardId);
@@ -103,10 +111,10 @@ export function usePathRunner() {
   // same reasoning as startMachine's app node; the path's position moves to the agent node.
   function resumeFromLogin(loginRid: string, agentDashboardId: string, originNodeId: string, agentNodeId: string, decoded: { idToken?: any; accessToken?: any }) {
     setAwaitingLogin(false); setComplete(false); setPendingExchange(null);
-    setSteps([
-      { label: 'User Login', result: { ok: true, status: 200, decoded: decoded.idToken ? { header: {}, payload: decoded.idToken } : undefined, raw: decoded }, tokenType: 'ID' },
-    ]);
+    const loginResult: TokenResult = { ok: true, status: 200, decoded: decoded.idToken ? { header: {}, payload: decoded.idToken } : undefined, raw: decoded };
+    setSteps([{ label: 'User Login', result: loginResult, tokenType: 'ID' }]);
     setPathNodeIds([originNodeId]);
+    setIncomingByNodeId({ [agentNodeId]: { label: 'User Login', result: loginResult, tokenType: 'ID' } });
     setCurrentNodeId(agentNodeId);
     setVisitedNodeIds([originNodeId, agentNodeId]);
     setActingAgentId(agentDashboardId);
@@ -193,6 +201,9 @@ export function usePathRunner() {
       const targetNodeId = effectivePending.targetNodeId;
       const wasAgentHop = effectivePending.kind === 'agent';
       setPendingExchange(null);
+      // The redemption's token is what actually lands ON the target node — record it as that
+      // node's "incoming" chip regardless of whether the hop was agent-to-agent or terminal.
+      setIncomingByNodeId((prev) => ({ ...prev, [targetNodeId]: { label: `Redeem — ${effectivePending.targetLabel}`, result: step3, tokenType: 'AT' } }));
       if (wasAgentHop && data.nextRid) {
         const targetDashboardId = targetNodeId.replace(/^agent:/, '');
         setCurrentNodeId(targetNodeId);
@@ -218,7 +229,7 @@ export function usePathRunner() {
 
   return {
     currentNodeId, actingAgentId, awaitingLogin, complete, pendingExchange,
-    steps, pathNodeIds, visitedNodeIds, running, error,
+    steps, pathNodeIds, visitedNodeIds, incomingByNodeId, running, error,
     startMachine, startUser, resumeFromLogin,
     runExchange, runRedeem, reset,
   };
