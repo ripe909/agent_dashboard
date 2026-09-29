@@ -9,7 +9,7 @@ import * as okta from '../services/okta';
 const router = Router();
 
 const ORG = () => process.env.OKTA_ORG_URL!;
-const BACKEND_PUBLIC_URL = () => process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
+const BACKEND_PUBLIC_URL = () => process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.BACKEND_PORT || 3001}`;
 const FRONTEND_URL = () => process.env.FRONTEND_URL || 'http://localhost:3000';
 
 // Lets a chat session ask for either the full scope set or a deliberately narrowed one on any

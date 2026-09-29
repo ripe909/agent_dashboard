@@ -6,7 +6,7 @@ import * as okta from '../services/okta';
 const router = Router();
 
 const ORG = () => process.env.OKTA_ORG_URL!;
-const BACKEND_PUBLIC_URL = () => process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
+const BACKEND_PUBLIC_URL = () => process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.BACKEND_PORT || 3001}`;
 const FRONTEND_URL = () => process.env.FRONTEND_URL || 'http://localhost:3000';
 
 // Okta normalizes an ORN's env segment (position 1) to "okta" once it's stored on a delegation

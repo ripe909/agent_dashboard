@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Starts the full local stack: the okta-agent-pg Postgres container, the backend
+# (Express, npm run dev), and the frontend (Next.js, npm run dev). See stop_dashboard
+# for the matching teardown. Ports are read from backend/.env and frontend/.env.local
+# rather than hardcoded — if a port is already taken by something else, this script
+# refuses to start rather than silently picking a different one or killing whatever's
+# already there.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+PG_CONTAINER="okta-agent-pg"
+PID_FILE="$ROOT_DIR/.dashboard.pids"
+BACKEND_LOG="/tmp/agent-dashboard-backend.log"
+FRONTEND_LOG="/tmp/agent-dashboard-frontend.log"
+
+# ── Resolve ports from .env files (read-only — never writes these files) ────────
+env_var() {
+  # env_var <file> <KEY> <default>
+  local file="$1" key="$2" default="$3"
+  if [ -f "$file" ]; then
+    local val
+    val="$(grep -m1 "^${key}=" "$file" | cut -d= -f2- || true)"
+    [ -n "$val" ] && { echo "$val"; return; }
+  fi
+  echo "$default"
+}
+
+BACKEND_PORT="$(env_var backend/.env BACKEND_PORT 3001)"
+FRONTEND_PORT="$(env_var frontend/.env.local FRONTEND_PORT 3000)"
+
+echo "Resolved ports — backend: $BACKEND_PORT, frontend: $FRONTEND_PORT"
+
+# Both files also keep a copy of the OTHER app's port (backend/.env's own FRONTEND_PORT, for
+# FRONTEND_URL; frontend/.env.local's own BACKEND_PORT, for BACKEND_URL) — same key names on both
+# sides now, but still two separately-maintained copies of each number. Nothing enforces they
+# actually match the other file's real port, so a stale copy would silently produce a working-
+# looking FRONTEND_URL/BACKEND_URL that points at the wrong port. Warn, don't block.
+backend_frontend_port="$(env_var backend/.env FRONTEND_PORT '')"
+frontend_backend_port="$(env_var frontend/.env.local BACKEND_PORT '')"
+if [ -n "$backend_frontend_port" ] && [ "$backend_frontend_port" != "$FRONTEND_PORT" ]; then
+  echo "Warning: backend/.env's FRONTEND_PORT ($backend_frontend_port) doesn't match frontend/.env.local's FRONTEND_PORT ($FRONTEND_PORT) — update one to match."
+fi
+if [ -n "$frontend_backend_port" ] && [ "$frontend_backend_port" != "$BACKEND_PORT" ]; then
+  echo "Warning: frontend/.env.local's BACKEND_PORT ($frontend_backend_port) doesn't match backend/.env's BACKEND_PORT ($BACKEND_PORT) — update one to match."
+fi
+
+# ── Okta redirect URI check ──────────────────────────────────────────────────
+# NextAuth builds the login callback as ${NEXTAUTH_URL}/api/auth/callback/okta, and NEXTAUTH_URL
+# is derived from the frontend's own port — if that port changed and Okta's app still only has the
+# old port's callback registered, login silently fails with redirect_uri_mismatch the first time
+# anyone tries it. Checks (and optionally fixes, with confirmation) this before starting anything.
+# Never runs through $(...) capture — the y/n prompt needs the real terminal's stdin/stdout, and a
+# non-zero exit here (declined, API failure, bad creds) must not trip set -e or abort this script.
+echo ""
+echo "Checking Okta redirect URI for port ${FRONTEND_PORT}…"
+redirect_check_status=0
+(cd "$ROOT_DIR/backend" && npx tsx scripts/check-redirect-uri.ts "$FRONTEND_PORT") || redirect_check_status=$?
+if [ "$redirect_check_status" -ne 0 ]; then
+  echo "Continuing to start the stack — login may fail until this is resolved."
+fi
+
+# ── Preflight: refuse to start if either port is already occupied ──────────────
+port_conflict() {
+  local port="$1"
+  lsof -iTCP:"$port" -sTCP:LISTEN -n -P 2>/dev/null | awk 'NR>1 {print}' || true
+}
+
+conflicts_found=0
+for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+  conflict="$(port_conflict "$port")"
+  if [ -n "$conflict" ]; then
+    echo ""
+    echo "Port $port is already in use:"
+    echo "$conflict" | while read -r line; do echo "  $line"; done
+    echo "Stop that process or change BACKEND_PORT in backend/.env / FRONTEND_PORT in frontend/.env.local, then re-run."
+    conflicts_found=1
+  fi
+done
+if [ "$conflicts_found" -ne 0 ]; then
+  exit 1
+fi
+
+# ── Postgres ─────────────────────────────────────────────────────────────────
+if ! docker inspect "$PG_CONTAINER" >/dev/null 2>&1; then
+  echo "Container '$PG_CONTAINER' does not exist — create it first (see README.md), then re-run."
+  exit 1
+fi
+
+echo "Starting Postgres container '$PG_CONTAINER'…"
+docker start "$PG_CONTAINER" >/dev/null
+
+echo -n "Waiting for Postgres to accept connections"
+pg_ready=0
+for _ in $(seq 1 10); do
+  if docker exec "$PG_CONTAINER" pg_isready -U user -d okta_agents >/dev/null 2>&1; then
+    pg_ready=1
+    break
+  fi
+  echo -n "."
+  sleep 1
+done
+echo ""
+if [ "$pg_ready" -ne 1 ]; then
+  echo "Postgres did not become ready in time — check 'docker logs $PG_CONTAINER'."
+  exit 1
+fi
+echo "Postgres is ready."
+
+# ── Backend ──────────────────────────────────────────────────────────────────
+echo "Starting backend (logging to $BACKEND_LOG)…"
+# Recorded PID is `npm run dev`'s own PID via $! — NOT the pid lsof would later report as the
+# port's listener. npm run dev -> tsx watch -> a re-exec'd node process is a 3-deep tree; the
+# actual listener is the innermost one, and killing only that leaves the outer two as orphans
+# (confirmed live — this is exactly what stop_dashboard must avoid). Recording the top of the
+# tree here lets stop_dashboard walk and kill the whole thing with pgrep -P.
+nohup bash -c "cd '$ROOT_DIR/backend' && exec npm run dev" > "$BACKEND_LOG" 2>&1 &
+backend_pid=$!
+
+echo -n "Waiting for backend on port $BACKEND_PORT"
+backend_ready=0
+for _ in $(seq 1 20); do
+  if curl -sf "http://localhost:$BACKEND_PORT/health" >/dev/null 2>&1; then
+    backend_ready=1
+    break
+  fi
+  echo -n "."
+  sleep 1
+done
+echo ""
+if [ "$backend_ready" -ne 1 ]; then
+  echo "Backend did not become healthy in time — check $BACKEND_LOG."
+  exit 1
+fi
+echo "Backend is up (pid $backend_pid)."
+
+# ── Frontend ─────────────────────────────────────────────────────────────────
+echo "Starting frontend (logging to $FRONTEND_LOG)…"
+# next dev only ever reads a port from the literal PORT env var in the real process environment —
+# it has no idea frontend/.env.local calls its own copy FRONTEND_PORT, and .env.local is loaded
+# into process.env for application code AFTER the CLI has already chosen its port anyway. So PORT
+# has to be exported here explicitly, or next dev silently falls through to the next free port.
+# Same $! reasoning as the backend above — record the top-level npm process, not a port listener.
+PORT="$FRONTEND_PORT" nohup bash -c "cd '$ROOT_DIR/frontend' && exec npm run dev" > "$FRONTEND_LOG" 2>&1 &
+frontend_pid=$!
+
+echo -n "Waiting for frontend on port $FRONTEND_PORT"
+frontend_ready=0
+for _ in $(seq 1 20); do
+  if lsof -tiTCP:"$FRONTEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    frontend_ready=1
+    break
+  fi
+  echo -n "."
+  sleep 1
+done
+echo ""
+if [ "$frontend_ready" -ne 1 ]; then
+  echo "Frontend did not come up in time — check $FRONTEND_LOG."
+  exit 1
+fi
+echo "Frontend is up (pid $frontend_pid)."
+
+# ── Record PIDs for stop_dashboard ──────────────────────────────────────────────
+{
+  echo "backend:$backend_pid"
+  echo "frontend:$frontend_pid"
+} > "$PID_FILE"
+
+echo ""
+echo "Dashboard is running:"
+echo "  Backend:  http://localhost:$BACKEND_PORT  (log: $BACKEND_LOG)"
+echo "  Frontend: http://localhost:$FRONTEND_PORT  (log: $FRONTEND_LOG)"
+echo "  Postgres: container '$PG_CONTAINER'"
+echo ""
+echo "Run ./stop_dashboard to stop everything."

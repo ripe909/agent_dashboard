@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Stops everything start_dashboard started: the backend and frontend dev servers
+# (via the PIDs start_dashboard recorded) and the okta-agent-pg Postgres container
+# (stopped, not removed — its data persists for next start). Safe to run even if
+# nothing is currently running, or if .dashboard.pids is missing/stale.
+set -uo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+PG_CONTAINER="okta-agent-pg"
+PID_FILE="$ROOT_DIR/.dashboard.pids"
+
+# Recursively collects pid and all of its descendants (npm run dev -> tsx watch -> re-exec'd
+# node, or npm run dev -> next-server, etc.) — killing only the recorded top-level pid leaves
+# the rest of that tree running as orphans (confirmed live while building this script: the
+# actual port listener is 2-3 levels down, not the pid start_dashboard records).
+collect_tree() {
+  local pid="$1"
+  echo "$pid"
+  local child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    collect_tree "$child"
+  done
+}
+
+stop_pid() {
+  local label="$1" pid="$2"
+  if ! ps -p "$pid" >/dev/null 2>&1; then
+    echo "$label (pid $pid) is not running — nothing to stop."
+    return
+  fi
+  local cmd
+  cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  case "$cmd" in
+    *"next dev"*|*"next-server"*|*"tsx watch"*|*"npm run dev"*|*"npm exec"*|*"$ROOT_DIR"*)
+      ;;
+    *)
+      echo "$label (pid $pid) doesn't look like a dashboard process (command: $cmd) — skipping, not killing it."
+      return
+      ;;
+  esac
+
+  echo "Stopping $label (pid $pid) and its child processes…"
+  local tree_pids
+  tree_pids="$(collect_tree "$pid")"
+  # Reverse order — kill descendants (innermost first) before the process that spawned them, so
+  # nothing gets re-parented to init and slips through.
+  local ordered
+  ordered="$(echo "$tree_pids" | tail -r)"
+  for p in $ordered; do
+    kill "$p" 2>/dev/null || true
+  done
+  for _ in $(seq 1 5); do
+    ps -p "$pid" >/dev/null 2>&1 || return
+    sleep 1
+  done
+  if ps -p "$pid" >/dev/null 2>&1; then
+    echo "$label (pid $pid) didn't fully exit — sending SIGKILL to remaining processes."
+    for p in $ordered; do
+      kill -9 "$p" 2>/dev/null || true
+    done
+  fi
+}
+
+if [ -f "$PID_FILE" ]; then
+  while IFS=: read -r label pid; do
+    [ -n "$pid" ] && stop_pid "$label" "$pid"
+  done < "$PID_FILE"
+  rm -f "$PID_FILE"
+else
+  echo "No .dashboard.pids file found — nothing recorded to stop for backend/frontend."
+fi
+
+if docker inspect "$PG_CONTAINER" >/dev/null 2>&1; then
+  status="$(docker inspect -f '{{.State.Status}}' "$PG_CONTAINER")"
+  if [ "$status" = "running" ]; then
+    echo "Stopping Postgres container '$PG_CONTAINER'…"
+    docker stop "$PG_CONTAINER" >/dev/null
+  else
+    echo "Postgres container '$PG_CONTAINER' is already stopped."
+  fi
+else
+  echo "Postgres container '$PG_CONTAINER' does not exist — nothing to stop."
+fi
+
+echo ""
+echo "Dashboard stopped."

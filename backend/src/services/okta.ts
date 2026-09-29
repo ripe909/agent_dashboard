@@ -450,6 +450,37 @@ export async function getApp(appId: string): Promise<AppOption> {
   return { id: a.id, label: a.label, applicationType: a.settings?.oauthClient?.application_type };
 }
 
+// GET /api/v1/apps/{id} accepts an OAuth client_id directly as the id (confirmed live — Okta's
+// list endpoint rejects filtering by client_id, but the direct-get path treats it the same as the
+// app's own internal id), so callers can look this up with just the client_id from an app's own
+// .env, no separate id lookup needed.
+export async function getAppRedirectUris(clientId: string): Promise<string[]> {
+  const res = await sswsFetch(`/api/v1/apps/${clientId}`);
+  if (!res.ok) throw new Error(`getApp ${res.status}: ${await res.text()}`);
+  const app = await res.json() as any;
+  return app.settings?.oauthClient?.redirect_uris || [];
+}
+
+// Appends redirectUri to the app's existing redirect_uris — never overwrites, in case an admin
+// configured others. Unlike setAppAuthMethodAndRedirect (which also forces client_secret_basic and
+// patches grant/response types for an agent's workload-principal-backed app), this only touches
+// redirect_uris, since the caller here is the org's own NextAuth login app and nothing else about
+// it should change.
+export async function addAppRedirectUri(clientId: string, redirectUri: string): Promise<void> {
+  const getRes = await sswsFetch(`/api/v1/apps/${clientId}`);
+  if (!getRes.ok) throw new Error(`getApp ${getRes.status}: ${await getRes.text()}`);
+  const app = await getRes.json() as any;
+  const existing: string[] = app.settings?.oauthClient?.redirect_uris || [];
+  if (existing.includes(redirectUri)) return;
+  app.settings.oauthClient.redirect_uris = [...existing, redirectUri];
+  const putRes = await sswsFetch(`/api/v1/apps/${clientId}`, { method: 'PUT', body: JSON.stringify(app) });
+  if (!putRes.ok) {
+    const err = await putRes.json() as any;
+    const causes = (err.errorCauses || []).map((c: any) => c.errorSummary).join('; ');
+    throw new Error(causes || err.errorSummary || `addAppRedirectUri ${putRes.status}`);
+  }
+}
+
 export interface AuthorizationServer { id: string; name: string; orn: string; }
 
 export async function listAuthorizationServers(orgId: string): Promise<AuthorizationServer[]> {

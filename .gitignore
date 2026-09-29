@@ -8,3 +8,5 @@ dist/
 drizzle/
 .vercel/
 .claude/
+Agent Dashboard.code-workspace
+.dashboard.pids

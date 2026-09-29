@@ -80,7 +80,7 @@ OKTA_AUTH_MODE=client_credentials
 OKTA_M2M_CLIENT_ID=<api-services-client-id>
 OKTA_M2M_PRIVATE_JWK=<private-jwk-json-from-public-keys-tab>
 FRONTEND_URL=https://your-frontend-host
-PORT=3001
+BACKEND_PORT=3001
 ```
 
 The backend will auto-migrate and seed default resources on first start.
@@ -121,6 +121,19 @@ npm run dev            # starts on :3000
 Open http://localhost:3000 → sign in with Okta → you're in.
 
 **Skipping Postgres for a quick demo:** set `DB_MODE=memory` in `backend/.env` (no `DATABASE_URL` needed). The backend then keeps its local state — the owner cache and resource catalog — in memory instead of Postgres. Everything works the same, with two tradeoffs: state resets on every restart, and local agent IDs change on restart (bookmarked `/agents/:id` URLs from a previous run will 404 until the list page is reloaded).
+
+### Starting/stopping the whole stack
+
+Once both `.env` files exist (from the steps above), `./start_dashboard` and `./stop_dashboard` bring up/tear down all three pieces together — the `okta-agent-pg` Postgres container, the backend, and the frontend:
+
+```bash
+./start_dashboard   # starts Postgres, backend, frontend; waits for each to be ready
+./stop_dashboard    # stops backend + frontend, stops (not removes) the Postgres container
+```
+
+Ports come from `BACKEND_PORT` in `backend/.env` and `FRONTEND_PORT` in `frontend/.env.local` (defaulting to 3001/3000 if unset) — `start_dashboard` never rewrites these files or picks a different port for you. If a port is already taken by something else, it prints what's using it and exits without starting anything; free the port (or change the relevant `.env` value) and re-run. The Postgres container itself must already exist (`docker ps -a` should show `okta-agent-pg`) — the scripts start/stop it, they don't create it.
+
+`start_dashboard` also checks whether the Okta login app's redirect URI is registered for the resolved frontend port (using the backend's Okta Management API credentials), and offers to add it live if it's missing — since NextAuth builds that URI from `FRONTEND_PORT`, changing it without updating Okta would otherwise break login with no earlier warning.
 
 ---
 
