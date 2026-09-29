@@ -69,7 +69,7 @@ router.post('/agents/:id/machine-access/token', async (req: Request, res: Respon
 
 // In-memory only — test logins are short-lived and this dashboard already keeps other
 // ephemeral state (like the M2M token cache in okta.ts) outside the DB the same way.
-const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; clientSecret: string; createdAt: number }>();
+const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; createdAt: number }>();
 const results = new Map<string, { decoded: any; rawToken: string; rawTokenType: string; agentId: string; createdAt: number }>();
 
 function base64url(buf: Buffer): string {
@@ -92,15 +92,16 @@ router.post('/agents/:id/user-access/start', async (req: Request, res: Response)
     const appId = await okta.ensureUserAccess(agent.oktaAgentId);
     const redirectUri = `${BACKEND_PUBLIC_URL()}/api/exercise/agents/user-access/callback`;
     const { clientId, clientSecret } = await okta.setAppAuthMethodAndRedirect(appId, redirectUri);
-    // Persist the same way Machine Access callers do — needed if the user continues past login
-    // to exercise this agent as a caller of another agent (see /agents/exercise/exchange below).
-    await store.updateAgentById(agent.id, { testClientSecret: clientSecret });
+    // Only persisted when Okta actually issued one (client_secret_basic branch) — a private_key_jwt
+    // agent's existing testPrivateKeyPem/testPrivateKeyKid is left alone and used instead, via
+    // resolveCallerCred in the callback below.
+    if (clientSecret) await store.updateAgentById(agent.id, { testClientSecret: clientSecret });
 
     pruneExpired(pendingLogins, 10 * 60 * 1000);
     const codeVerifier = base64url(randomBytes(32));
     const codeChallenge = base64url(createHash('sha256').update(codeVerifier).digest());
     const state = randomUUID();
-    pendingLogins.set(state, { codeVerifier, agentId: agent.id, clientId, clientSecret, createdAt: Date.now() });
+    pendingLogins.set(state, { codeVerifier, agentId: agent.id, clientId, createdAt: Date.now() });
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -132,24 +133,18 @@ router.get('/agents/user-access/callback', async (req: Request, res: Response) =
   pendingLogins.delete(state);
 
   try {
-    const tokenRes = await fetch(`${ORG()}/oauth2/v1/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        Authorization: `Basic ${Buffer.from(`${pending.clientId}:${pending.clientSecret}`).toString('base64')}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: pending.codeVerifier,
-      }),
-    });
-    const body = await tokenRes.json() as any;
-    if (!tokenRes.ok) {
-      return res.redirect(`${FRONTEND_URL()}/exercise?error=${encodeURIComponent(body.error_description || body.error || 'Token exchange failed')}`);
+    const agent = await store.findAgentById(pending.agentId);
+    if (!agent) return res.redirect(`${FRONTEND_URL()}/exercise?error=${encodeURIComponent('Agent not found')}`);
+    const cred = resolveCallerCred(agent);
+    const result = await okta.postToken(
+      `${ORG()}/oauth2/v1/token`, pending.clientId, cred,
+      { grant_type: 'authorization_code', code, redirect_uri: redirectUri, code_verifier: pending.codeVerifier },
+      'Exercise: User Login (Authorization Code)'
+    );
+    if (!result.ok) {
+      return res.redirect(`${FRONTEND_URL()}/exercise?error=${encodeURIComponent(result.raw?.error_description || result.raw?.error || 'Token exchange failed')}`);
     }
+    const body = result.raw;
 
     const decode = (jwt?: string) => {
       if (!jwt) return undefined;

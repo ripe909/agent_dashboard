@@ -43,7 +43,7 @@ function decodeIdToken(jwt: string): any {
 // scopeMode here is passed straight through to the callback's redirect query string, purely so
 // the frontend's mode toggle survives the login redirect's full page navigation — it plays no
 // part in the login exchange itself and isn't stored on the resulting ChatSession.
-const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; clientSecret: string; scopeMode: ScopeMode; createdAt: number }>();
+const pendingLogins = new Map<string, { codeVerifier: string; agentId: string; clientId: string; scopeMode: ScopeMode; createdAt: number }>();
 // One hop per agent in the resolved A2A chain — hops[i] is performed BY agentChain[i]; every hop
 // but the last targets the next agent in the chain, the last targets the Marketing MCP AS itself.
 // Exposed to the frontend (via /message and /session/:loginRid) purely for the read-only graph
@@ -255,12 +255,16 @@ router.post('/:agentId/login/start', async (req: Request, res: Response) => {
     const appId = await okta.ensureUserAccess(agent.oktaAgentId);
     const redirectUri = `${BACKEND_PUBLIC_URL()}/api/chat/login/callback`;
     const { clientId, clientSecret } = await okta.setAppAuthMethodAndRedirect(appId, redirectUri);
+    // Only persisted when Okta actually issued one (client_secret_basic branch) — a private_key_jwt
+    // agent's existing testPrivateKeyPem/testPrivateKeyKid is left alone and used instead, via
+    // resolveCallerCred in the callback below.
+    if (clientSecret) await store.updateAgentById(agent.id, { testClientSecret: clientSecret });
 
     pruneExpired(pendingLogins, 10 * 60 * 1000);
     const codeVerifier = base64url(randomBytes(32));
     const codeChallenge = base64url(createHash('sha256').update(codeVerifier).digest());
     const state = randomUUID();
-    pendingLogins.set(state, { codeVerifier, agentId: agent.id, clientId, clientSecret, scopeMode, createdAt: Date.now() });
+    pendingLogins.set(state, { codeVerifier, agentId: agent.id, clientId, scopeMode, createdAt: Date.now() });
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -292,23 +296,17 @@ router.get('/login/callback', async (req: Request, res: Response) => {
   pendingLogins.delete(state);
 
   try {
-    const tokenRes = await fetch(`${ORG()}/oauth2/v1/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        Authorization: `Basic ${Buffer.from(`${pending.clientId}:${pending.clientSecret}`).toString('base64')}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: pending.codeVerifier,
-      }),
-    });
-    const body = await tokenRes.json() as any;
-    if (!tokenRes.ok || !body.id_token) {
-      return res.redirect(`${FRONTEND_URL()}/chat?loginError=${encodeURIComponent(body.error_description || body.error || 'Token exchange failed')}`);
+    const agent = await store.findAgentById(pending.agentId);
+    if (!agent) return res.redirect(`${FRONTEND_URL()}/chat?loginError=${encodeURIComponent('Agent not found')}`);
+    const cred = resolveCallerCred(agent);
+    const result = await okta.postToken(
+      `${ORG()}/oauth2/v1/token`, pending.clientId, cred,
+      { grant_type: 'authorization_code', code, redirect_uri: redirectUri, code_verifier: pending.codeVerifier },
+      'Chat: User Login (Authorization Code)'
+    );
+    const body = result.raw;
+    if (!result.ok || !body.id_token) {
+      return res.redirect(`${FRONTEND_URL()}/chat?loginError=${encodeURIComponent(body?.error_description || body?.error || 'Token exchange failed')}`);
     }
 
     pruneExpired(chatSessions, 60 * 60 * 1000);
@@ -339,7 +337,7 @@ function resolveCallerCred(agent: { testClientSecret: string | null; testPrivate
 // Onboarded agents don't automatically get a persisted testClientSecret/testPrivateKeyPem — only
 // the Exercise page's real User Access login flow does that today. Lazily provision one here the
 // first time an agent is used in chat, using the same app-backed-vs-native detection routes.ts's
-// credential endpoints already rely on (oktaAgent.appId truthy => app-backed).
+// credential endpoints already rely on (okta.isAppBackedAgent).
 async function ensureCallerCredential(agent: NonNullable<Awaited<ReturnType<typeof store.findAgentById>>>) {
   // Kill switch guard: without this, an agent that's never sent a chat message before (no
   // persisted testClientSecret yet) would silently mint a FRESH, un-killed secret right here on
@@ -352,8 +350,8 @@ async function ensureCallerCredential(agent: NonNullable<Awaited<ReturnType<type
 
   const oktaAgent = await okta.getAIAgent(agent.oktaAgentId!);
   let clientSecret: string;
-  if (oktaAgent.appId) {
-    const rotated = await okta.rotateAppSecret(oktaAgent.appId);
+  if (okta.isAppBackedAgent(oktaAgent)) {
+    const rotated = await okta.rotateAppSecret(oktaAgent.appId!);
     clientSecret = rotated.clientSecret;
   } else {
     const created = await okta.createAgentSecret(agent.oktaAgentId!);

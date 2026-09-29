@@ -114,7 +114,7 @@ export default function AgentDetailTabs({ agent, currentOwner, streamlinedUserAc
             <h2 className="text-lg font-bold text-[var(--text-primary)] mb-1">Client registration</h2>
             <p className="text-sm text-[var(--text-secondary)] mb-6">How this agent authenticates its identity to Okta.</p>
             {agent.credentials ? (
-              <AgentCredentials agentId={agent.id} credentials={agent.credentials} />
+              <AgentCredentials agentId={agent.id} credentials={agent.credentials} hasTestPrivateKey={!!agent.hasTestPrivateKey} />
             ) : (
               <p className="text-sm text-[var(--text-secondary)] italic">Credentials are available after the agent is activated.</p>
             )}

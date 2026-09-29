@@ -17,6 +17,7 @@ interface Credentials {
 interface Props {
   agentId: string;
   credentials: Credentials;
+  hasTestPrivateKey: boolean;
 }
 
 const AUTH_METHODS = [
@@ -110,18 +111,24 @@ const NATIVE_OPTIONS = [
   },
 ];
 
-function NativeCredentials({ agentId, credentials: initial }: { agentId: string; credentials: Credentials }) {
+function NativeCredentials({ agentId, credentials: initial, hasTestPrivateKey: initialHasKey }: { agentId: string; credentials: Credentials; hasTestPrivateKey: boolean }) {
   const [credentials, setCredentials] = useState(initial);
   const [loading, setLoading] = useState<'secret' | 'jwk' | null>(null);
   const [error, setError] = useState('');
   const [newSecret, setNewSecret] = useState('');
   const [newKey, setNewKey] = useState<{ kid: string; privateKeyPem: string } | null>(null);
+  const [hasTestPrivateKey, setHasTestPrivateKey] = useState(initialHasKey);
+  const [importingKey, setImportingKey] = useState(false);
+  const [importJwkText, setImportJwkText] = useState('');
+  const [importError, setImportError] = useState('');
+  const [importSaved, setImportSaved] = useState(false);
 
   async function refresh() {
     try {
       const res = await fetch(`${BACKEND}/api/agents/${agentId}`);
       const data = await res.json();
       if (data.credentials) setCredentials(data.credentials);
+      setHasTestPrivateKey(!!data.hasTestPrivateKey);
     } catch {}
   }
 
@@ -146,6 +153,28 @@ function NativeCredentials({ agentId, credentials: initial }: { agentId: string;
       setNewKey(data);
       await refresh();
     } catch (e: any) { setError(e.message); }
+    setLoading(null);
+  }
+
+  // Okta never returns private key material after the fact — this is the only way to supply a key
+  // that was minted before this dashboard persisted it, minted outside this dashboard entirely, or
+  // needs replacing. The backend validates the pasted key's kid is actually registered with Okta
+  // for this agent before storing it.
+  async function importKey() {
+    setImportError(''); setImportSaved(false);
+    setLoading('jwk');
+    try {
+      const res = await fetch(`${BACKEND}/api/agents/${agentId}/credentials/jwk/import`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jwk: importJwkText }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setImportError(data.error || 'Failed to import key'); return; }
+      setImportJwkText('');
+      setImportingKey(false);
+      setImportSaved(true);
+      setTimeout(() => setImportSaved(false), 3000);
+      await refresh();
+    } catch (e: any) { setImportError(e.message); }
     setLoading(null);
   }
 
@@ -189,16 +218,69 @@ function NativeCredentials({ agentId, credentials: initial }: { agentId: string;
                     </button>
                   )}
                   {value === 'private_key_jwt' && (
-                    <button
-                      onClick={generateKey}
-                      disabled={loading !== null}
-                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40 flex-shrink-0"
-                    >
-                      {loading === 'jwk' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
-                      Generate
-                    </button>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={generateKey}
+                        disabled={loading !== null}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd]/15 border border-[#1662dd]/25 text-[#1662dd] rounded-lg hover:bg-[#1662dd]/25 transition-colors disabled:opacity-40"
+                      >
+                        {loading === 'jwk' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                        Generate
+                      </button>
+                      <button
+                        onClick={() => { setImportingKey((v) => !v); setImportError(''); }}
+                        disabled={loading !== null}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 border border-[var(--border-default)] text-[var(--text-secondary)] rounded-lg hover:bg-[var(--bg-surface-muted)] transition-colors disabled:opacity-40"
+                      >
+                        {hasTestPrivateKey ? 'Replace key' : 'Paste key'}
+                      </button>
+                    </div>
                   )}
                 </div>
+
+                {value === 'private_key_jwt' && !hasTestPrivateKey && !importingKey && (
+                  <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    No private key is stored locally for this agent — Exercise and Chat can't authenticate as it until one is generated or pasted.
+                  </div>
+                )}
+
+                {value === 'private_key_jwt' && importingKey && (
+                  <div className="mt-3 space-y-2">
+                    <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
+                      Private JWK (JSON)
+                    </label>
+                    <textarea
+                      value={importJwkText}
+                      onChange={(e) => setImportJwkText(e.target.value)}
+                      placeholder='{"kty":"RSA","kid":"...","n":"...","e":"AQAB","d":"...","p":"...","q":"...","dp":"...","dq":"...","qi":"..."}'
+                      rows={5}
+                      className="w-full bg-[var(--bg-surface-muted)] border border-[var(--border-default)] rounded-lg px-3 py-2.5 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[#1662dd]/40"
+                    />
+                    <p className="text-xs text-[var(--text-muted)]">
+                      The JWK's <code className="font-mono">kid</code> must match a key already registered for this agent in Okta.
+                    </p>
+                    {importError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{importError}</div>}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={importKey}
+                        disabled={loading !== null || !importJwkText.trim()}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-[#1662dd] text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-40"
+                      >
+                        {loading === 'jwk' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                        Save
+                      </button>
+                      <button
+                        onClick={() => { setImportingKey(false); setImportJwkText(''); setImportError(''); }}
+                        className="text-xs font-semibold px-3 py-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {value === 'private_key_jwt' && importSaved && (
+                  <div className="mt-3 text-xs text-emerald-600 flex items-center gap-1"><Check className="w-3 h-3" />Private key saved.</div>
+                )}
 
                 {value === 'client_secret_basic' && newSecret && (
                   <div className="mt-3">
@@ -332,8 +414,8 @@ function AppCredentials({ agentId, credentials }: { agentId: string; credentials
   );
 }
 
-export default function AgentCredentials({ agentId, credentials }: Props) {
+export default function AgentCredentials({ agentId, credentials, hasTestPrivateKey }: Props) {
   return credentials.source === 'native'
-    ? <NativeCredentials agentId={agentId} credentials={credentials} />
+    ? <NativeCredentials agentId={agentId} credentials={credentials} hasTestPrivateKey={hasTestPrivateKey} />
     : <AppCredentials agentId={agentId} credentials={credentials} />;
 }

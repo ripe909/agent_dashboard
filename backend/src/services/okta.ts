@@ -4,7 +4,7 @@
 //   'client_credentials' — OAuth2 M2M via OKTA_M2M_CLIENT_ID/SECRET
 
 import { randomUUID, generateKeyPairSync } from 'crypto';
-import { importJWK, importPKCS8, SignJWT } from 'jose';
+import { importJWK, importPKCS8, exportPKCS8, SignJWT } from 'jose';
 import { eventBus, nextId, labelForPath } from './eventBus';
 
 const ORG = () => process.env.OKTA_ORG_URL!;
@@ -225,10 +225,21 @@ export async function getUser(userId: string): Promise<OktaUser> {
 
 export interface OktaAIAgent {
   id: string; platform: string; status: string; appId?: string;
+  oauthClient?: { clientId: string };
   profile: { name: string; description?: string };
   created?: string; lastUpdated?: string; _links?: any;
   signOnProvider?: { appInstanceId?: string };
   resourceUrl?: string;
+}
+
+// appId is set both for agents that are genuinely app-backed AND for agents migrated from a
+// pre-agents version of Okta, where it's a stale pointer to the pre-migration app — the agent's
+// real, current credential config lives on its native oauthClient instead. Confirmed live against
+// CHAT_AGENT/VOICE_AGENT (both migrated): the appId app always showed default
+// client_secret_basic/no secret while oauthClient showed the actually-configured, actively-used
+// credentials. So oauthClient, when present, is always the authoritative source.
+export function isAppBackedAgent(oktaAgent: Pick<OktaAIAgent, 'appId' | 'oauthClient'>): boolean {
+  return !!oktaAgent.appId && !oktaAgent.oauthClient?.clientId;
 }
 
 async function pollOperation(opUrl: string, maxAttempts = 15): Promise<string> {
@@ -626,7 +637,7 @@ export interface AgentTestCredential {
 // Shared low-level POST to a token endpoint, authenticating either via Basic auth (client_secret)
 // or a signed client_assertion (private_key_jwt) depending on which credential is supplied.
 // Emits on the event bus so every hop of the chain shows up in the Okta API Events panel.
-async function postToken(
+export async function postToken(
   tokenEndpoint: string, clientId: string, cred: AgentTestCredential, params: Record<string, string>, label: string
 ): Promise<ExerciseTokenResult> {
   const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };
@@ -950,6 +961,25 @@ export async function createAgentJwk(agentId: string): Promise<{ kid: string; pr
   return { kid, privateKeyPem };
 }
 
+// Okta never returns private key material after the fact — createAgentJwk above only ever shows
+// it once, at mint time. This lets a user supply a key some other way instead (minted before this
+// dashboard persisted it, minted outside this dashboard entirely, or just re-supplying a key kept
+// elsewhere). Takes a single private JWK JSON object — the same shape this codebase already uses
+// for OKTA_M2M_PRIVATE_JWK, and what createAgentJwk's own keypair would produce on the private
+// side — and converts it to the PEM+kid shape everything else here (signAssertion, the agents
+// table) already expects, so no other code needs to know this path exists.
+// Confirmed live: importJWK needs { extractable: true } here or exportPKCS8 throws "CryptoKey is
+// not extractable" — jose's WebCrypto-backed import defaults to non-extractable.
+export async function convertPrivateJwkToPem(jwkJson: string): Promise<{ kid: string; privateKeyPem: string }> {
+  let jwk: any;
+  try { jwk = JSON.parse(jwkJson); } catch { throw new Error('Not valid JSON'); }
+  if (!jwk.kid) throw new Error('The JWK must include a "kid" field');
+  if (jwk.kty !== 'RSA') throw new Error('Only RSA JWKs are supported');
+  const key = await importJWK(jwk, 'RS256', { extractable: true });
+  const privateKeyPem = await exportPKCS8(key as any);
+  return { kid: jwk.kid, privateKeyPem };
+}
+
 export async function getNativeAgentCredentials(agentId: string): Promise<AgentCredentials> {
   const [jwks, secrets, client] = await Promise.all([
     listAgentJwks(agentId),
@@ -1006,18 +1036,36 @@ export async function setAgentAuthMethod(appId: string, authMethod: string): Pro
 // instead and appends the given callback URL to its redirect_uris (appending, not overwriting, in
 // case an admin already configured others). Returns the app's real client_id and secret so the
 // backend can complete the code exchange server-side with Basic auth.
-export async function setAppAuthMethodAndRedirect(appId: string, redirectUri: string): Promise<{ clientId: string; clientSecret: string }> {
+// This app IS the agent's own native OAuth client for User-Access-enabled agents (confirmed live:
+// same client_id on both sides, and flipping the app's auth method flips the agent's real
+// Client Registration auth method too) — forcing client_secret_basic here to run a test login
+// silently downgrades a private_key_jwt agent's real production credential. So this only forces
+// client_secret_basic when the app isn't already on private_key_jwt; when it is, that's preserved
+// (Okta requires jwks be present on any PUT while private_key_jwt is set, confirmed live via a 400
+// "jwks is required" otherwise — fetched from this same app's own /credentials/jwks endpoint).
+export async function setAppAuthMethodAndRedirect(appId: string, redirectUri: string): Promise<{ clientId: string; clientSecret?: string; authMethod: string }> {
   const getRes = await sswsFetch(`/api/v1/apps/${appId}`);
   if (!getRes.ok) throw new Error(`getApp ${getRes.status}`);
   const app = await getRes.json() as any;
 
   app.credentials = app.credentials || {};
   app.credentials.oauthClient = app.credentials.oauthClient || {};
-  app.credentials.oauthClient.token_endpoint_auth_method = 'client_secret_basic';
-  delete app.credentials.oauthClient.pkce_required;
+  const currentAuthMethod = app.credentials.oauthClient.token_endpoint_auth_method;
 
   app.settings = app.settings || {};
   app.settings.oauthClient = app.settings.oauthClient || {};
+
+  if (currentAuthMethod === 'private_key_jwt') {
+    const jwksRes = await sswsFetch(`/api/v1/apps/${appId}/credentials/jwks`);
+    if (jwksRes.ok) {
+      const { keys } = await jwksRes.json() as any;
+      app.settings.oauthClient.jwks = { keys: keys.map((k: any) => ({ kty: k.kty, kid: k.kid, use: k.use, alg: k.alg, e: k.e, n: k.n })) };
+    }
+  } else {
+    app.credentials.oauthClient.token_endpoint_auth_method = 'client_secret_basic';
+    delete app.credentials.oauthClient.pkce_required;
+  }
+
   const existingRedirects: string[] = app.settings.oauthClient.redirect_uris || [];
   if (!existingRedirects.includes(redirectUri)) {
     app.settings.oauthClient.redirect_uris = [...existingRedirects, redirectUri];
@@ -1043,6 +1091,7 @@ export async function setAppAuthMethodAndRedirect(appId: string, redirectUri: st
   return {
     clientId: updated.credentials?.oauthClient?.client_id || appId,
     clientSecret: updated.credentials?.oauthClient?.client_secret,
+    authMethod: updated.credentials?.oauthClient?.token_endpoint_auth_method,
   };
 }
 

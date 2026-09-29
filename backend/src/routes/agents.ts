@@ -83,8 +83,13 @@ router.get('/', async (_req: Request, res: Response) => {
         // Find or create the local row
         const local = await store.findAgentByOktaId(oktaAgent.id);
         const linked = local ? await store.listAgentResourceIds(local.id) : [];
+        // Same reasoning as GET /:id — never send the raw testClientSecret/testPrivateKeyPem
+        // values to the browser, just whether one is stored.
+        const { testClientSecret, testPrivateKeyPem, testPrivateKeyKid, ...safeLocal } = local || {} as any;
         return {
-          ...(local || {}),
+          ...safeLocal,
+          hasTestClientSecret: !!testClientSecret,
+          hasTestPrivateKey: !!(testPrivateKeyPem && testPrivateKeyKid),
           oktaAgentId: oktaAgent.id,
           name: oktaAgent.profile.name,
           description: oktaAgent.profile.description || null,
@@ -146,9 +151,9 @@ router.get('/:id', async (req: Request, res: Response) => {
     if (agent.oktaAgentId) {
       try {
         oktaData = await okta.getAIAgent(agent.oktaAgentId);
-        if (oktaData?.appId) {
-          credentials = await okta.getAgentCredentials(oktaData.appId);
-        } else if (oktaData?.oauthClient?.clientId) {
+        if (oktaData && okta.isAppBackedAgent(oktaData)) {
+          credentials = await okta.getAgentCredentials(oktaData.appId!);
+        } else if (oktaData) {
           credentials = await okta.getNativeAgentCredentials(agent.oktaAgentId);
         }
         adminConsoleUrl = await okta.getAgentAdminUrl(agent.oktaAgentId);
@@ -156,8 +161,15 @@ router.get('/:id', async (req: Request, res: Response) => {
       try { resourceUrl = await okta.getAgentResourceUrl(agent.oktaAgentId); } catch {}
     }
 
+    // testClientSecret/testPrivateKeyPem are the actual live credential values Exercise/Chat sign
+    // with — never send those to the browser (nothing here currently reads them, they were just
+    // being spread in unused until now). hasTestClientSecret/hasTestPrivateKey are the safe
+    // "do we have one stored" signal the credentials UI actually needs.
+    const { testClientSecret, testPrivateKeyPem, testPrivateKeyKid, ...safeAgent } = agent;
     res.json({
-      ...agent,
+      ...safeAgent,
+      hasTestClientSecret: !!testClientSecret,
+      hasTestPrivateKey: !!(testPrivateKeyPem && testPrivateKeyKid),
       resources: linked,
       okta: oktaData,
       credentials,
@@ -253,7 +265,7 @@ router.post('/:id/kill-switch', async (req: Request, res: Response) => {
     if (agent.killSwitchActive) return res.json({ killSwitchActive: true });
 
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
-    if (oktaAgent.appId) {
+    if (okta.isAppBackedAgent(oktaAgent)) {
       return res.status(400).json({ error: 'This agent authenticates through a backing app — the kill switch only supports native agent credentials today' });
     }
 
@@ -295,39 +307,79 @@ router.put('/:id/credentials', async (req: Request, res: Response) => {
     const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
-    if (!oktaAgent.appId) return res.status(400).json({ error: 'Agent must be activated before configuring credentials' });
-    const result = await okta.setAgentAuthMethod(oktaAgent.appId, authMethod);
+    if (!okta.isAppBackedAgent(oktaAgent)) return res.status(400).json({ error: 'Agent must be activated before configuring credentials' });
+    const result = await okta.setAgentAuthMethod(oktaAgent.appId!, authMethod);
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/agents/:id/credentials/secret — generate a client secret for a native (no backing app) agent
+// POST /api/agents/:id/credentials/secret — generate a client secret for a native (no backing app) agent.
+// Okta only returns the real secret value once, on this response — persisting it here is the ONLY
+// way it survives past this request, same reasoning as agentRequests.ts's onboarding wizard (see
+// its own createAgentSecret call). Without this, Exercise/Chat's ensureCallerCredential would find
+// no stored credential and silently mint ANOTHER fresh secret on first use, same live-confirmed
+// per-client-secret-cap issue that fix already addressed for the wizard path.
 router.post('/:id/credentials/secret', async (req: Request, res: Response) => {
   try {
     const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
-    if (oktaAgent.appId) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
+    if (okta.isAppBackedAgent(oktaAgent)) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
     const result = await okta.createAgentSecret(agent.oktaAgentId);
+    await store.updateAgentById(agent.id, { testClientSecret: result.clientSecret });
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/agents/:id/credentials/jwk — generate a keypair and register the public key for a native agent
+// POST /api/agents/:id/credentials/jwk — generate a keypair and register the public key for a
+// native agent. Okta only ever sees the PUBLIC half (registered above) — the private PEM is
+// generated locally and returned once in this response, so persisting it here is the only way to
+// keep it for later use (same reasoning as the secret endpoint above).
 router.post('/:id/credentials/jwk', async (req: Request, res: Response) => {
   try {
     const agent = await store.findAgentById(req.params.id);
     if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
     const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
-    if (oktaAgent.appId) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
+    if (okta.isAppBackedAgent(oktaAgent)) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
     const result = await okta.createAgentJwk(agent.oktaAgentId);
+    await store.updateAgentById(agent.id, { testPrivateKeyPem: result.privateKeyPem, testPrivateKeyKid: result.kid });
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agents/:id/credentials/jwk/import — paste a private key for an existing agent. Okta
+// never returns private key material after the fact, so this is the only way to supply one that
+// was minted before this dashboard persisted it, minted outside this dashboard entirely, or needs
+// replacing (e.g. after a local DB reset). Validates the pasted key's kid is actually registered
+// with Okta for this agent before storing it, so a wrong/mistyped key fails clearly here instead
+// of surfacing as a mysterious signing failure later in Exercise/Chat.
+router.post('/:id/credentials/jwk/import', async (req: Request, res: Response) => {
+  const { jwk } = req.body; // JSON string (as typed/pasted) or already-parsed object — accept either
+  if (!jwk) return res.status(400).json({ error: 'jwk is required' });
+  try {
+    const agent = await store.findAgentById(req.params.id);
+    if (!agent?.oktaAgentId) return res.status(404).json({ error: 'Agent not found' });
+    const oktaAgent = await okta.getAIAgent(agent.oktaAgentId);
+    if (okta.isAppBackedAgent(oktaAgent)) return res.status(400).json({ error: 'This agent uses a backing app — manage credentials via the Authentication Method setting above' });
+
+    const jwkJson = typeof jwk === 'string' ? jwk : JSON.stringify(jwk);
+    const { kid, privateKeyPem } = await okta.convertPrivateJwkToPem(jwkJson);
+
+    const registered = await okta.listAgentJwks(agent.oktaAgentId);
+    if (!registered.some((k) => k.kid === kid)) {
+      return res.status(400).json({ error: `No JWK with kid "${kid}" is registered for this agent in Okta — check you're pasting the right key, or register its public half first.` });
+    }
+
+    await store.updateAgentById(agent.id, { testPrivateKeyPem: privateKeyPem, testPrivateKeyKid: kid });
+    res.json({ kid });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
   }
 });
 
