@@ -31,7 +31,9 @@ export interface ResourceNodeData {
 // User Access has no distinct app-caller identity in this codebase's model (it's the agent's own
 // backing OIDC client, not a delegation-link caller) so it still needs a synthetic origin node —
 // unlike Machine Access, which is now represented by the real service-client app node instead.
-export interface OriginNodeData { kind: 'origin'; originKind: 'user'; agentDashboardId: string; label: string; }
+// supertitle defaults to "Start here" (the live, clickable Exercise/Chat meaning) — the read-only
+// Logging page overrides it to "User login" instead, since there's nothing to click there.
+export interface OriginNodeData { kind: 'origin'; originKind: 'user'; agentDashboardId: string; label: string; supertitle?: string; }
 
 export type GraphNodeData = AgentNodeData | AppNodeData | ResourceNodeData | OriginNodeData;
 export interface GraphNode { id: string; data: GraphNodeData; }

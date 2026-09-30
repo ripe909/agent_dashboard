@@ -23,7 +23,7 @@ export default function OriginNode({ data }: NodeProps & { data: OriginNodeData 
           <Icon className="w-3.5 h-3.5" style={{ color: colour }} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wide">Start here</div>
+          <div className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wide">{data.supertitle || 'Start here'}</div>
           <div className="text-sm font-semibold text-[var(--text-primary)] truncate">{data.label}</div>
         </div>
       </div>

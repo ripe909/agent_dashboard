@@ -14,10 +14,11 @@ const AUTH_MODE = () => process.env.OKTA_AUTH_MODE || 'api_token';
 // okta.governance.resourceOwner.{read,manage}, okta.authorizationServers.read, okta.clients.read
 // (needed to read a native agent's real token_endpoint_auth_method from /oauth2/v1/clients/{id} —
 // see getNativeAgentCredentials), okta.clients.manage (needed to PUT a corrected
-// token_endpoint_auth_method — see createAgentSecret), and okta.groups.read (needed for the
-// agent-request wizard's group picker — see listGroups) must also be granted on the M2M app's
-// API Scopes tab.
-const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage okta.authorizationServers.read okta.clients.read okta.clients.manage okta.groups.read';
+// token_endpoint_auth_method — see createAgentSecret), okta.groups.read (needed for the
+// agent-request wizard's group picker — see listGroups), and okta.logs.read (needed for the
+// Logging page's System Log queries — see getOAuthSystemLogs) must also be granted on the M2M
+// app's API Scopes tab.
+const M2M_SCOPES = 'okta.users.read okta.aiAgents.manage okta.apps.manage okta.governance.resourceOwner.read okta.governance.resourceOwner.manage okta.authorizationServers.read okta.clients.read okta.clients.manage okta.groups.read okta.logs.read';
 
 function toAdminUrl(orgUrl: string): string {
   return orgUrl
@@ -1399,4 +1400,146 @@ export async function updateAgentConnectionScopes(
   );
   if (!res.ok) throw new Error(`updateAgentConnectionScopes ${res.status}: ${await res.text()}`);
   return res.json() as Promise<AgentConnection>;
+}
+
+// ── System Log (Logging page) ──────────────────────────────────────────────────
+
+export interface OktaLogEvent {
+  uuid: string; published: string; eventType: string; displayMessage: string;
+  outcome: { result: string; reason?: string };
+  actor: { id: string; type: string; displayName?: string; alternateId?: string };
+  target?: { id: string; type: string; displayName?: string }[];
+  debugContext?: { debugData?: Record<string, any> };
+  transaction?: { id: string };
+}
+
+// Org-wide (not agent-scoped) — every OAuth2 grant/authorize event in the time range, paginated
+// via the response's own Link header (confirmed live: a 24h window exceeds the 1000-per-page cap).
+export async function getOAuthSystemLogs(sinceIso: string, untilIso: string): Promise<OktaLogEvent[]> {
+  const all: OktaLogEvent[] = [];
+  let path: string | undefined = `/api/v1/logs?${new URLSearchParams({ since: sinceIso, until: untilIso, filter: 'eventType sw "app.oauth2."', limit: '1000', sortOrder: 'ASCENDING' })}`;
+  for (let page = 0; page < 10 && path; page++) {
+    let res: Response;
+    if (page === 0) { res = await sswsFetch(path); } else { res = await sswsFetch(path, {}, ''); }
+    if (!res.ok) break;
+    all.push(...(await res.json() as OktaLogEvent[]));
+    path = res.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+  }
+  return all;
+}
+
+export interface LogHop {
+  eventType: string; published: string; outcome: string; reason?: string;
+  actorId: string; actorType: string; actorDisplayName?: string;
+  issuedTokenId?: string; issuedTokenType?: 'access_token' | 'id_jag' | 'id_token';
+  subjectTokenId?: string;
+  resourceType?: string; resourceName?: string;
+  requestId?: string;
+  raw: OktaLogEvent;
+}
+export interface LogInteraction {
+  rootTokenId: string; hops: LogHop[]; startedAt: string;
+  actorIds: Set<string>;
+}
+
+const ISSUED_TOKEN_TYPES = ['access_token', 'id_jag', 'id_token'];
+
+// Groups flat System Log events into end-to-end interaction chains by following Okta's own
+// token-lineage pointers — confirmed live: a grant event's target[] names the token/id-jag/id_token
+// it just issued, and a consuming event's debugContext.debugData.subjectTokenId names the exact
+// upstream token it presented.
+//
+// Token lineage is a TREE (a token can fan out — e.g. one cached access token gets exchanged more
+// than once within its TTL, confirmed live via repeated Exercise runs sharing one token), not a set
+// of disjoint groups — union-find was tried first and is wrong here: it merges every unrelated
+// branch that ever consumed the same reused token into one giant blob. Enumerating every distinct
+// root-to-leaf path instead correctly yields one interaction per actual end-to-end call, even when
+// several interactions share the same opening hop(s).
+export function clusterLogInteractions(events: OktaLogEvent[]): LogInteraction[] {
+  const hops: LogHop[] = events
+    .filter(e => e.eventType.startsWith('app.oauth2.') && (e.eventType.includes('grant') || e.eventType === 'app.oauth2.authorize'))
+    .map(e => {
+      // target[] lists both the consumed (subject) and produced (issued) token on an exchange/
+      // redemption event, in no type-priority order — confirmed live the ISSUED token is always
+      // the LAST entry (787/794 grant events checked; the only exceptions are refresh_token grants
+      // and an unrelated consent-grant event, neither part of this lineage). subjectTokenId in
+      // debugData is the authoritative subject when present (token-exchange events set it); jwt-
+      // bearer redemptions don't set it at all, so fall back to the issued-token-typed entry
+      // appearing BEFORE the last element — confirmed live this is exactly the id_jag/access_token
+      // that hop's own token-exchange step produced.
+      const target = e.target || [];
+      const issued = ISSUED_TOKEN_TYPES.includes(target[target.length - 1]?.type) ? target[target.length - 1] : undefined;
+      const dd = e.debugContext?.debugData;
+      const subjectTokenId = dd?.subjectTokenId
+        || target.slice(0, -1).find(t => ISSUED_TOKEN_TYPES.includes(t.type))?.id;
+      return {
+        eventType: e.eventType, published: e.published, outcome: e.outcome.result, reason: e.outcome.reason,
+        actorId: e.actor.id, actorType: e.actor.type, actorDisplayName: e.actor.displayName,
+        issuedTokenId: issued?.id, issuedTokenType: issued?.type as LogHop['issuedTokenType'],
+        subjectTokenId,
+        resourceType: dd?.resourceType,
+        resourceName: dd?.authorizationServerName || dd?.resource,
+        requestId: dd?.requestId as string | undefined,
+        raw: e,
+      };
+    });
+
+  const issuedTokenIds = new Set(hops.filter(h => h.issuedTokenId).map(h => h.issuedTokenId!));
+  const childrenByToken = new Map<string, LogHop[]>();
+  for (const h of hops) {
+    if (!h.subjectTokenId) continue;
+    if (!childrenByToken.has(h.subjectTokenId)) childrenByToken.set(h.subjectTokenId, []);
+    childrenByToken.get(h.subjectTokenId)!.push(h);
+  }
+
+  // An authorization_code redemption issues an id_token AND an access_token in the same request
+  // (confirmed live: same requestId) — only the id_token ever gets consumed downstream (by a
+  // token-exchange); the sibling access_token grant is real but genuinely never used again, and
+  // has no subjectTokenId/children of its own, so it would otherwise become its own disconnected
+  // 1-hop "interaction". Since both grants share the same actor and requestId, attach the unused
+  // sibling into the SAME hop-list position as the one that does lead somewhere, rather than
+  // showing it as a separate row — it's part of the same login event.
+  const byRequestId = new Map<string, LogHop[]>();
+  for (const h of hops) {
+    if (!h.requestId) continue;
+    if (!byRequestId.has(h.requestId)) byRequestId.set(h.requestId, []);
+    byRequestId.get(h.requestId)!.push(h);
+  }
+  const attachedHops = new Map<LogHop, LogHop[]>(); // host hop -> sibling hops to fold in alongside it
+  const attachedSet = new Set<LogHop>();
+  for (const group of byRequestId.values()) {
+    if (group.length < 2) continue;
+    const withChildren = group.filter(h => h.issuedTokenId && childrenByToken.has(h.issuedTokenId));
+    const dangling = group.filter(h => !h.subjectTokenId && !(h.issuedTokenId && childrenByToken.has(h.issuedTokenId)));
+    if (withChildren.length === 1 && dangling.length > 0) {
+      attachedHops.set(withChildren[0], dangling);
+      for (const h of dangling) attachedSet.add(h);
+    }
+  }
+
+  // A root is a hop with no subjectTokenId, or one whose subjectTokenId's own grant wasn't
+  // captured in this time range (the chain started before the window) — either way, nothing in
+  // this fetch can be its parent, so it begins its own interaction. Hops folded into a sibling
+  // above are excluded here so they don't also form their own separate root.
+  const roots = hops.filter(h => (!h.subjectTokenId || !issuedTokenIds.has(h.subjectTokenId)) && !attachedSet.has(h));
+
+  const interactions: LogInteraction[] = [];
+  function walk(path: LogHop[], hop: LogHop, visitedTokens: Set<string>) {
+    const nextPath = [...path, hop, ...(attachedHops.get(hop) || [])];
+    const children = hop.issuedTokenId ? childrenByToken.get(hop.issuedTokenId) : undefined;
+    // visitedTokens guards against a malformed/cyclic lineage looping forever — real token ids are
+    // unique per grant, so this should never trigger in practice.
+    if (!children?.length || (hop.issuedTokenId && visitedTokens.has(hop.issuedTokenId))) {
+      interactions.push({
+        rootTokenId: nextPath[0].issuedTokenId || nextPath[0].raw.uuid, hops: nextPath, startedAt: nextPath[0].published,
+        actorIds: new Set(nextPath.map(h => h.actorId)),
+      });
+      return;
+    }
+    const nextVisited = hop.issuedTokenId ? new Set(visitedTokens).add(hop.issuedTokenId) : visitedTokens;
+    for (const child of children) walk(nextPath, child, nextVisited);
+  }
+  for (const root of roots) walk([], root, new Set());
+
+  return interactions.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 }
